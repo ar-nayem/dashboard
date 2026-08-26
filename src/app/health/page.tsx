@@ -7,11 +7,12 @@ import { EmptyState } from "@/components/empty-state";
 import {
   getAllMetricSummaries,
   getMetricSeries,
+  getRecentReadings,
   formatMetricValue,
 } from "@/lib/data-health";
 import { HEALTH_METRIC_LABELS, HEALTH_METRIC_TYPES, parseEnum, type HealthMetricType } from "@/lib/enums";
 import { formatDate, formatShortDate, formatPercentDelta } from "@/lib/format";
-import { logHealthMetric } from "./actions";
+import { deleteHealthMetric, logHealthMetric } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +33,10 @@ export default async function HealthPage({
   const metric = parseEnum(HEALTH_METRIC_TYPES, params.metric) as HealthMetricType;
   const range = CHART_RANGES.find((r) => r.key === params.range) ?? CHART_RANGES[2];
 
-  const [summaries, series] = await Promise.all([
+  const [summaries, series, readings] = await Promise.all([
     getAllMetricSummaries(30),
     getMetricSeries(metric, range.days),
+    getRecentReadings(25),
   ]);
 
   const featured = summaries.find((s) => s.type === metric)!;
@@ -164,7 +166,7 @@ export default async function HealthPage({
       {/* --- Manual log --------------------------------------------------- */}
       <section className="mt-10">
         <h2 className="section-title">Log a reading</h2>
-        <form action={logHealthMetric} className="card mt-3 grid gap-3 sm:grid-cols-4">
+        <form action={logHealthMetric} className="card mt-3 grid gap-3 sm:grid-cols-5">
           <div>
             <label htmlFor="type" className="field-label">
               Metric
@@ -192,6 +194,19 @@ export default async function HealthPage({
             />
           </div>
 
+          {/* Weight is the one metric people genuinely record in two units;
+              the rest have a single sensible one and take the default. */}
+          <div>
+            <label htmlFor="unit" className="field-label">
+              Unit
+            </label>
+            <select id="unit" name="unit" className="input mt-1" defaultValue="">
+              <option value="">default</option>
+              <option value="kg">kg</option>
+              <option value="lb">lb</option>
+            </select>
+          </div>
+
           <div>
             <label htmlFor="date" className="field-label">
               Date
@@ -205,6 +220,67 @@ export default async function HealthPage({
             </button>
           </div>
         </form>
+        <p className="mt-2 text-xs text-faint-foreground">
+          Logging the same metric twice on one day corrects that day&apos;s reading rather than
+          adding a second one.
+        </p>
+      </section>
+
+      {/* --- Raw readings -------------------------------------------------- */}
+      <section className="mt-8">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="section-title">Recent readings</h2>
+          <span className="text-xs text-faint-foreground">
+            Averages hide typos — this is where you find and delete them.
+          </span>
+        </div>
+
+        <div className="card mt-3 flex flex-col gap-1">
+          {readings.length === 0 && (
+            <p className="text-sm text-muted-foreground">Nothing logged yet.</p>
+          )}
+
+          {readings.map((reading) => (
+            <div
+              key={reading.id}
+              className="flex items-center justify-between gap-3 border-b border-border py-1.5 text-sm last:border-0"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-foreground/90">{reading.label}</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    reading.source === "manual"
+                      ? "bg-surface-hover text-muted-foreground"
+                      : "bg-info/15 text-info"
+                  }`}
+                >
+                  {reading.source === "apple_health" ? "from phone" : reading.source}
+                </span>
+              </span>
+
+              <span className="flex shrink-0 items-center gap-3">
+                <span className="tnum text-foreground">
+                  <Private chars={3}>{formatMetricValue(reading.type, reading.value)}</Private>{" "}
+                  <span className="text-faint-foreground">{reading.unit}</span>
+                </span>
+                <span className="tnum text-xs text-faint-foreground">
+                  {formatShortDate(reading.date)}
+                </span>
+
+                <form action={deleteHealthMetric}>
+                  <input type="hidden" name="id" value={reading.id} />
+                  <button
+                    type="submit"
+                    aria-label={`Delete ${reading.label} reading from ${formatShortDate(reading.date)}`}
+                    className="cursor-pointer text-xs text-faint-foreground hover:text-danger"
+                  >
+                    ✕
+                  </button>
+                </form>
+              </span>
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   );

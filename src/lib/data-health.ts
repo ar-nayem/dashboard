@@ -103,6 +103,40 @@ export async function getAllMetricSummaries(windowDays = 30): Promise<MetricSumm
   return Promise.all(HEALTH_METRIC_TYPES.map((type) => getMetricSummary(type, windowDays)));
 }
 
+export type ReadingRow = {
+  id: string;
+  type: HealthMetricType;
+  label: string;
+  value: number;
+  unit: string;
+  date: Date;
+  source: string;
+};
+
+/**
+ * The most recent raw readings across every metric.
+ *
+ * Deliberately un-aggregated: the tiles and chart show averages, which hide
+ * exactly the kind of typo you need to find in order to delete it.
+ */
+export async function getRecentReadings(limit = 25, type?: HealthMetricType): Promise<ReadingRow[]> {
+  const rows = await prisma.healthMetric.findMany({
+    where: type ? { type } : {},
+    orderBy: [{ date: "desc" }, { type: "asc" }],
+    take: limit,
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    type: row.type as HealthMetricType,
+    label: HEALTH_METRIC_LABELS[row.type as HealthMetricType] ?? row.type,
+    value: row.value,
+    unit: row.unit,
+    date: row.date,
+    source: row.source,
+  }));
+}
+
 /** Formats a value with the precision that metric deserves. */
 export function formatMetricValue(type: HealthMetricType, value: number | null): string {
   if (value === null) return "—";
