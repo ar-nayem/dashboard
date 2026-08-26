@@ -1,0 +1,720 @@
+// Personal life/business dashboard.
+//
+// SQLite has no enum and no array type, so every "enum" below is a String
+// whose allowed values are documented in a comment above the field, and
+// every "list" is a comma-separated String. The allowed-value comments are
+// the contract — keep them in sync with the parsers in src/lib/enums.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------------------
+// Cross-cutting
+// ---------------------------------------------------------------------------
+
+// The tagging lever shared by every module. Deleting an Area never blocks or
+// cascades — it just un-tags (SetNull on every relation below).
+model Area {
+  id        String   @id @default(cuid())
+  name      String
+  color     String
+  icon      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks    Task[]
+  goals    Goal[]
+  habits   Habit[]
+  projects Project[]
+  ideas    Idea[]
+}
+
+// ---------------------------------------------------------------------------
+// Todos
+// ---------------------------------------------------------------------------
+
+// status:   "todo" | "in_progress" | "done"
+// priority: "low" | "medium" | "high"
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  notes       String?
+  status      String    @default("todo")
+  priority    String    @default("medium")
+  // Drives the "SPRINT — RIGHT NOW" group on the Todos board.
+  sprint      Boolean   @default(false)
+  dueDate     DateTime?
+  completedAt DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  clientId String?
+  client   Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([areaId])
+  @@index([projectId])
+  @@index([clientId])
+  @@index([status, sprint])
+}
+
+// The short coloured chips on task rows ("PB", "PR").
+model Client {
+  id        String   @id @default(cuid())
+  name      String
+  shortCode String
+  color     String   @default("#4f8cff")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks Task[]
+}
+
+// ---------------------------------------------------------------------------
+// Habits
+// ---------------------------------------------------------------------------
+
+// kind: "do"     — a habit you want to perform (Floss, Make Bed)
+//       "abstain"— a habit you want to avoid  (No Beer, No Alcohol)
+//       "auto"   — logged by an integration rather than by hand (Workout)
+// frequency: "daily" | "weekly" | "custom"
+// weekdays: comma-separated 0-6 (Sun-Sat), only read when frequency="custom"
+model Habit {
+  id            String   @id @default(cuid())
+  name          String
+  emoji         String?
+  kind          String   @default("do")
+  frequency     String   @default("daily")
+  weekdays      String?
+  timesPerWeek  Int?
+  sortOrder     Int      @default(0)
+  archived      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  logs  HabitLog[]
+  goals Goal[]
+
+  @@index([areaId])
+  @@index([archived, sortOrder])
+}
+
+// One row per habit per day, but ONLY for days that were actually logged.
+// "Not logged" is the absence of a row, which is why status has no "unlogged"
+// value — the grid renders a missing row as the grey cell.
+//
+// status: "success" | "fail" | "skip"
+//   success = green cell (did the thing / successfully abstained)
+//   fail    = red cell
+//   skip    = explicitly excused, does not break a streak
+//
+// date is normalised to UTC midnight so the [habitId, date] unique lets the
+// grid toggle with an upsert instead of a read-then-write.
+model HabitLog {
+  id        String   @id @default(cuid())
+  habitId   String
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  date      DateTime
+  status    String   @default("success")
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([habitId, date])
+  @@index([habitId, date])
+}
+
+// ---------------------------------------------------------------------------
+// Goals
+// ---------------------------------------------------------------------------
+
+// kind: "metric"       — progress computed from currentValue/targetValue
+//       "habit_streak" — progress computed from the linked Habit's streak
+//       "manual"       — progress is whatever you typed
+// status: "active" | "completed" | "abandoned"
+// category: "habits" | "business" | "financial" | "health"  (the filter pills)
+model Goal {
+  id           String    @id @default(cuid())
+  title        String
+  description  String?
+  kind         String    @default("manual")
+  category     String    @default("business")
+  targetValue  Float?
+  currentValue Float?
+  unit         String?
+  startedAt    DateTime  @default(now())
+  targetDate   DateTime?
+  targetLabel  String?
+  status       String    @default("active")
+  // Only read when kind = "manual".
+  progress     Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  // Set only when kind = "habit_streak".
+  habitId String?
+  habit   Habit?  @relation(fields: [habitId], references: [id], onDelete: SetNull)
+
+  @@index([areaId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Fitness
+// ---------------------------------------------------------------------------
+
+// equipment: "barbell" | "dumbbell" | "machine" | "cable" | "bodyweight" | "plate_loaded" | "other"
+model Exercise {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  equipment   String   @default("other")
+  muscleGroup String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  templateEntries TemplateExercise[]
+  sets            WorkoutSet[]
+}
+
+// groupName is the heading a template sits under in the picker ("Arnold's
+// Staple", "Nippard PPL", "Bodyweight").
+model WorkoutTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  groupName   String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  exercises TemplateExercise[]
+  workouts  Workout[]
+
+  @@index([groupName, sortOrder])
+}
+
+model TemplateExercise {
+  id         String @id @default(cuid())
+  templateId String
+  template   WorkoutTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   Exercise        @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  sortOrder  Int    @default(0)
+  targetSets Int    @default(3)
+  repRange   String @default("8-12")
+
+  @@unique([templateId, exerciseId])
+  @@index([templateId, sortOrder])
+}
+
+// finishedAt null = the session is live right now (the "0:16 · 1/22" header).
+// templateId is kept as provenance but the sets are free-form once started,
+// so editing a template never rewrites past workouts.
+model Workout {
+  id         String    @id @default(cuid())
+  name       String
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  templateId String?
+  template   WorkoutTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  sets WorkoutSet[]
+
+  @@index([startedAt])
+  @@index([finishedAt])
+}
+
+// unit is per-set, not per-user: the screenshots show a machine press logged
+// in lb and a dumbbell press logged in kg inside the same session.
+// unit: "lb" | "kg"
+model WorkoutSet {
+  id         String   @id @default(cuid())
+  workoutId  String
+  workout    Workout  @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  setNumber  Int
+  weight     Float?
+  unit       String   @default("lb")
+  reps       Int?
+  completed  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([workoutId, exerciseId, setNumber])
+  @@index([workoutId])
+  @@index([exerciseId])
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+// One tall table rather than a column per metric, so adding a new metric is
+// a new `type` value and needs no migration.
+//
+// type: "weight" | "resting_hr" | "hrv" | "vo2max" | "steps" | "active_energy" | "sleep"
+// source: "manual" | "apple_health" | "whoop" | "oura"
+model HealthMetric {
+  id        String   @id @default(cuid())
+  type      String
+  value     Float
+  unit      String
+  date      DateTime
+  source    String   @default("manual")
+  createdAt DateTime @default(now())
+
+  @@unique([type, date, source])
+  @@index([type, date])
+}
+
+// ---------------------------------------------------------------------------
+// Finance
+// ---------------------------------------------------------------------------
+
+// kind: "bank" | "brokerage" | "crypto" | "cash" | "loan" | "property"
+// Liability accounts (loan) carry negative balances in their snapshots, so
+// net worth is a plain SUM over the latest snapshot per account.
+model Account {
+  id        String   @id @default(cuid())
+  name      String
+  kind      String   @default("bank")
+  currency  String   @default("USD")
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapshots    AccountSnapshot[]
+  transactions Transaction[]
+  holdings     Holding[]
+}
+
+// Point-in-time balance. The net-worth trajectory chart is built from these
+// rather than from summing transactions, so a missed transaction never
+// silently corrupts the headline number.
+model AccountSnapshot {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date      DateTime
+  balance   Float
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, date])
+  @@index([date])
+}
+
+// kind: "income" | "expense"
+model Transaction {
+  id          String   @id @default(cuid())
+  date        DateTime
+  amount      Float
+  kind        String   @default("expense")
+  category    String?
+  description String?
+
+  /// "manual" | "stripe" | ... — which adapter (if any) created this row.
+  source      String   @default("manual")
+  /// Stable ID at the source, e.g. "stripe:ch_123". Unique so a cron re-run
+  /// updates the existing row instead of duplicating income every sync.
+  /// Null for anything entered by hand.
+  externalId  String?  @unique
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([date])
+  @@index([kind, date])
+  @@index([projectId])
+}
+
+model Holding {
+  id           String   @id @default(cuid())
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  symbol       String
+  shares       Float
+  costBasis    Float
+  currentPrice Float?
+  updatedAt    DateTime @updatedAt
+
+  @@unique([accountId, symbol])
+}
+
+model Loan {
+  id             String    @id @default(cuid())
+  name           String
+  principal      Float
+  balance        Float
+  interestRate   Float?
+  monthlyPayment Float?
+  startedAt      DateTime?
+  payoffDate     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+// status: "live" | "building" | "parked" | "archived"
+// kind:   "app" | "site" | "store" | "other"
+model Project {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?
+  status      String    @default("building")
+  kind        String    @default("app")
+  url         String?
+  launchedAt  DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // --- External identifiers -------------------------------------------
+  // How each sync adapter finds this project's data at the source. A null
+  // means "this project has nothing at that source", and the adapter skips
+  // it rather than guessing from the name.
+  //
+  // "owner/repo", e.g. "acme/dashboard"
+  githubRepo      String?
+  // GA4 numeric property ID, e.g. "123456789"
+  gaPropertyId    String?
+  // Search Console property, exactly as verified (often "sc-domain:example.com")
+  gscSiteUrl      String?
+  // App Store numeric app ID (the digits in the App Store URL)
+  appStoreAppId   String?
+  // RevenueCat project ID, for subscription revenue
+  revenueCatId    String?
+
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  metrics      ProjectMetric[]
+  todos        ProjectTodo[]
+  proposals    AdvisorProposal[]
+  notes        ProjectNote[]
+  tasks        Task[]
+  transactions Transaction[]
+
+  @@index([status, sortOrder])
+}
+
+// One row per project per day. The 7D/30D/365D toggles and the sparklines
+// are windowed reads over this table. Nullable columns because a given
+// project only has some of these (an Etsy store has no installs).
+model ProjectMetric {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  date           DateTime
+  installs       Int?
+  revenue        Float?
+  uniqueVisitors Int?
+  activeUsers    Int?
+
+  // Written by the GitHub adapter.
+  commits        Int?
+
+  // Written by the Search Console adapter.
+  impressions    Int?
+  clicks         Int?
+  avgPosition    Float?
+
+  createdAt      DateTime @default(now())
+
+  // Every column above is nullable and each adapter upserts only its own,
+  // so GA writing visitors never clobbers App Store's installs for the same
+  // project and day.
+  @@unique([projectId, date])
+  @@index([projectId, date])
+}
+
+model ProjectTodo {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  text      String
+  done      Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, done])
+}
+
+// The AI "advisor" suggestions. Accepting one is what creates a ProjectTodo;
+// the proposal row stays behind as history rather than being deleted.
+// status: "pending" | "accepted" | "dismissed"
+model AdvisorProposal {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  text      String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, status])
+}
+
+// Free-form "next version notes" panel, one row per note line.
+model ProjectNote {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+// ---------------------------------------------------------------------------
+// Video
+// ---------------------------------------------------------------------------
+
+// stage:    "idea" | "in_progress" | "published"   (the three board columns)
+// format:   "short" | "long"
+// priority: "low" | "medium" | "high"
+// platforms: comma-separated from youtube,tiktok,instagram,x,threads
+model Video {
+  id         String    @id @default(cuid())
+  title      String
+  stage      String    @default("idea")
+  format     String    @default("long")
+  priority   String    @default("medium")
+  platforms  String    @default("youtube")
+  workOnDate DateTime?
+  postDate   DateTime?
+  script     String?
+  url        String?
+  sortOrder  Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  subtasks VideoSubtask[]
+
+  @@index([stage, sortOrder])
+}
+
+model VideoSubtask {
+  id        String   @id @default(cuid())
+  videoId   String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  text      String
+  done      Boolean  @default(false)
+  sortOrder Int      @default(0)
+
+  @@index([videoId])
+}
+
+// Daily follower/view snapshot per platform — feeds the "Views over time"
+// chart and the 7d/28d/90d/All windows.
+// platform: "youtube" | "instagram" | "x" | "tiktok" | "threads"
+model SocialStat {
+  id         String   @id @default(cuid())
+  platform   String
+  date       DateTime
+  followers  Int?
+  /// Views on this day alone. Null when it could not be derived (see below).
+  views      Int?
+  /// Cumulative lifetime views as reported by the platform.
+  ///
+  /// Stored because the YouTube Data API only exposes running totals, so the
+  /// daily `views` figure is this minus yesterday's. Keeping the raw total
+  /// means a missed sync day can be reconciled later instead of being lost.
+  lifetimeViews Int?
+  watchHours Float?
+  posts      Int?
+  createdAt  DateTime @default(now())
+
+  @@unique([platform, date])
+  @@index([platform, date])
+}
+
+// ---------------------------------------------------------------------------
+// Written
+// ---------------------------------------------------------------------------
+
+// stage: "idea" | "drafting" | "editing" | "published"
+model Article {
+  id          String    @id @default(cuid())
+  title       String
+  stage       String    @default("idea")
+  platform    String?
+  body        String?
+  wordCount   Int       @default(0)
+  url         String?
+  publishDate DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([stage, sortOrder])
+}
+
+// ---------------------------------------------------------------------------
+// Itinerary
+// ---------------------------------------------------------------------------
+
+// The strip view sorts by startDate; "currently here" is derived (today
+// between startDate and endDate) rather than stored, so it can never go
+// stale.
+model Trip {
+  id        String   @id @default(cuid())
+  city      String
+  country   String
+  flag      String?
+  startDate DateTime
+  endDate   DateTime
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([startDate])
+}
+
+// ---------------------------------------------------------------------------
+// Ideas
+// ---------------------------------------------------------------------------
+
+// category: "business" | "tools" | "content"
+// status:   "open" | "building" | "shipped" | "dropped"
+model Idea {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  category    String   @default("business")
+  status      String   @default("open")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([category, status])
+}
+
+// ---------------------------------------------------------------------------
+// Home-page widgets
+// ---------------------------------------------------------------------------
+
+// kind: "card" | "visa" | "passport" | "residency" | "license" | "other"
+// The home page shows days-until-expiry, computed at render time.
+model Document {
+  id        String    @id @default(cuid())
+  name      String
+  kind      String    @default("other")
+  expiresAt DateTime?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([expiresAt])
+}
+
+// birthYear is optional — it is only used to show an age badge next to the
+// name, and plenty of contacts you only know the day for.
+model Birthday {
+  id        String   @id @default(cuid())
+  name      String
+  month     Int
+  day       Int
+  birthYear Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([month, day])
+}
+
+// The "Recently Shipped" feed.
+model ShipLog {
+  id        String   @id @default(cuid())
+  title     String
+  shippedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([shippedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+// One row per external data source. v1 has no real API calls behind these —
+// the adapters in src/lib/integrations are stubs that only touch this table,
+// so the Sync Status panel is real UI over honest "never synced" data.
+//
+// key:    stable identifier the adapter registers under
+// status: "ok" | "stale" | "error" | "never"
+model Integration {
+  id           String    @id @default(cuid())
+  key          String    @unique
+  name         String
+  status       String    @default("never")
+  lastSyncedAt DateTime?
+  // For OAuth sources, when the current token stops working.
+  expiresAt    DateTime?
+  lastError    String?
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  runs SyncRun[]
+
+  @@index([sortOrder])
+}
+
+// One row per sync attempt. Without this there is no way to tell a source
+// that is genuinely healthy from one that silently stopped returning rows —
+// `Integration.lastSyncedAt` alone can't show that.
+//
+// trigger: "manual" | "cron"
+model SyncRun {
+  id            String    @id @default(cuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  ok            Boolean   @default(false)
+  trigger       String    @default("manual")
+  /// How many rows the adapter actually wrote.
+  recordsWritten Int      @default(0)
+  detail        String?
+  error         String?
+
+  @@index([integrationId, startedAt])
+}
