@@ -12,7 +12,8 @@
     "db:reset": "tsx prisma/reset.ts",
     "db:seed:demo": "tsx prisma/demo-seed.ts",
     "db:studio": "prisma studio",
-    "set:password": "node scripts/set-password.mjs"
+    "set:password": "node scripts/set-password.mjs",
+    "seed:workouts": "tsx prisma/seed-workouts.ts"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.9.1",

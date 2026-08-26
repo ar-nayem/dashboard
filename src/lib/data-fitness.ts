@@ -10,23 +10,61 @@ export async function getLiveWorkout() {
   });
 }
 
-export async function getTemplatesByGroup() {
+export type TemplateCard = {
+  id: string;
+  name: string;
+  description: string | null;
+  exerciseCount: number;
+  /** Total working sets across the template — the honest "how long is this". */
+  totalSets: number;
+  /** Distinct muscle groups, in the order they are first trained. */
+  muscleGroups: string[];
+  exercises: { name: string; targetSets: number; repRange: string; muscleGroup: string | null }[];
+};
+
+export async function getTemplatesByGroup(): Promise<{ name: string; templates: TemplateCard[] }[]> {
   const templates = await prisma.workoutTemplate.findMany({
-    orderBy: [{ groupName: "asc" }, { sortOrder: "asc" }],
+    orderBy: [{ sortOrder: "asc" }, { groupName: "asc" }],
     include: {
       exercises: {
         orderBy: { sortOrder: "asc" },
-        include: { exercise: { select: { name: true } } },
+        include: { exercise: { select: { name: true, muscleGroup: true } } },
       },
     },
   });
 
-  const groups = new Map<string, typeof templates>();
+  const groups = new Map<string, TemplateCard[]>();
+
   for (const template of templates) {
+    const card: TemplateCard = {
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      exerciseCount: template.exercises.length,
+      totalSets: template.exercises.reduce((sum, entry) => sum + entry.targetSets, 0),
+      // A Set preserves insertion order, so this reads in training order
+      // rather than alphabetically — which is what makes a "3-part" day
+      // legible at a glance.
+      muscleGroups: [
+        ...new Set(
+          template.exercises
+            .map((entry) => entry.exercise.muscleGroup)
+            .filter((group): group is string => Boolean(group)),
+        ),
+      ],
+      exercises: template.exercises.map((entry) => ({
+        name: entry.exercise.name,
+        targetSets: entry.targetSets,
+        repRange: entry.repRange,
+        muscleGroup: entry.exercise.muscleGroup,
+      })),
+    };
+
     const list = groups.get(template.groupName) ?? [];
-    list.push(template);
+    list.push(card);
     groups.set(template.groupName, list);
   }
+
   return [...groups.entries()].map(([name, items]) => ({ name, templates: items }));
 }
 

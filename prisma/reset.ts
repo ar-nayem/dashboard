@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { INTEGRATION_SEED } from "./integration-seed";
+import { installWorkoutLibrary } from "./seed-workouts";
 
 const adapter = new PrismaBetterSqlite3({ url: process.env.DATABASE_URL ?? "file:./dev.db" });
 const prisma = new PrismaClient({ adapter });
@@ -55,7 +56,13 @@ async function main() {
   console.log("Creating the integration registry…");
   await prisma.integration.createMany({ data: INTEGRATION_SEED });
 
-  console.log("Done. The database is empty and ready for your own data.");
+  // Reinstalled rather than left empty: an exercise library and workout
+  // templates are reference data the Fitness tab needs to function, not
+  // someone's personal records. Demo projects and fake revenue stay opt-in.
+  console.log("Installing the workout library…");
+  await installWorkoutLibrary(prisma);
+
+  console.log("\nDone. No personal data — ready for your own.");
 }
 
 main()

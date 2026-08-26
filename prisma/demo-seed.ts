@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { INTEGRATION_SEED } from "./integration-seed";
+import { installWorkoutLibrary } from "./seed-workouts";
 
 // DEMO DATA ONLY.
 //
@@ -336,121 +337,53 @@ async function main() {
   });
 
   // --- Fitness -------------------------------------------------------------
-  // A general-purpose exercise library — this part is genuinely reusable, so
-  // it is worth keeping after a reset.
-  const exerciseSeeds = [
-    { name: "Bench Press (Barbell)", equipment: "barbell", muscleGroup: "Chest" },
-    { name: "Bench Press (Dumbbell)", equipment: "dumbbell", muscleGroup: "Chest" },
-    { name: "Incline Bench Press (Barbell)", equipment: "barbell", muscleGroup: "Chest" },
-    { name: "Incline Chest Press (Machine)", equipment: "machine", muscleGroup: "Chest" },
-    { name: "Chest Fly (Cable)", equipment: "cable", muscleGroup: "Chest" },
-    { name: "Overhead Press (Barbell)", equipment: "barbell", muscleGroup: "Shoulders" },
-    { name: "Lateral Raise (Dumbbell)", equipment: "dumbbell", muscleGroup: "Shoulders" },
-    { name: "Rope Tricep Pushdown", equipment: "cable", muscleGroup: "Triceps" },
-    { name: "Pull Up", equipment: "bodyweight", muscleGroup: "Back" },
-    { name: "Chin Up", equipment: "bodyweight", muscleGroup: "Back" },
-    { name: "Bent-Over Row", equipment: "barbell", muscleGroup: "Back" },
-    { name: "Lat Pulldown", equipment: "cable", muscleGroup: "Back" },
-    { name: "Seated Row", equipment: "machine", muscleGroup: "Back" },
-    { name: "Barbell Curl", equipment: "barbell", muscleGroup: "Biceps" },
-    { name: "Squat", equipment: "barbell", muscleGroup: "Quads" },
-    { name: "Leg Press", equipment: "machine", muscleGroup: "Quads" },
-    { name: "Romanian Deadlift", equipment: "barbell", muscleGroup: "Hamstrings" },
-    { name: "Bulgarian Split Squat", equipment: "bodyweight", muscleGroup: "Quads" },
-    { name: "Seated Calf Raise", equipment: "machine", muscleGroup: "Calves" },
-    { name: "Push Up", equipment: "bodyweight", muscleGroup: "Chest" },
-    { name: "Inverted Row", equipment: "bodyweight", muscleGroup: "Back" },
-    { name: "Reverse Lunge", equipment: "bodyweight", muscleGroup: "Quads" },
-    { name: "Hanging Leg Raise", equipment: "bodyweight", muscleGroup: "Abs" },
-  ];
+  // The exercise library and templates come from the shared definition rather
+  // than a second copy here — Exercise.name is unique, so a duplicate list
+  // would collide, and the stock templates are real reference data anyway.
+  // Only the fake workout *history* below is demo content.
+  await installWorkoutLibrary(prisma, () => {});
 
-  const exercises: Record<string, string> = {};
-  for (const data of exerciseSeeds) {
-    exercises[data.name] = (await prisma.exercise.create({ data })).id;
-  }
+  const allExercises = await prisma.exercise.findMany({
+    select: { id: true, name: true, equipment: true },
+  });
+  const exerciseByName = new Map(allExercises.map((exercise) => [exercise.name, exercise]));
 
-  const templateSeeds = [
-    {
-      name: "Push",
-      groupName: "Push / Pull / Legs",
-      description: "Chest, shoulders, triceps.",
-      exercises: ["Bench Press (Barbell)", "Incline Bench Press (Barbell)", "Overhead Press (Barbell)", "Lateral Raise (Dumbbell)", "Rope Tricep Pushdown", "Chest Fly (Cable)"],
-    },
-    {
-      name: "Pull",
-      groupName: "Push / Pull / Legs",
-      description: "Back and biceps.",
-      exercises: ["Pull Up", "Bent-Over Row", "Lat Pulldown", "Seated Row", "Barbell Curl"],
-    },
-    {
-      name: "Legs",
-      groupName: "Push / Pull / Legs",
-      description: "Quads, hamstrings, calves.",
-      exercises: ["Squat", "Leg Press", "Romanian Deadlift", "Bulgarian Split Squat", "Seated Calf Raise", "Hanging Leg Raise"],
-    },
-    {
-      name: "Full Body A",
-      groupName: "Bodyweight",
-      description: "No equipment. Push, pull, single-leg, core.",
-      exercises: ["Push Up", "Pull Up", "Bulgarian Split Squat", "Inverted Row", "Reverse Lunge", "Hanging Leg Raise"],
-    },
-    {
-      name: "Full Body B",
-      groupName: "Bodyweight",
-      description: "Chin grip, posterior emphasis.",
-      exercises: ["Push Up", "Chin Up", "Reverse Lunge", "Inverted Row", "Hanging Leg Raise"],
-    },
-  ];
-
-  const templates: Record<string, string> = {};
-  for (const [index, seed] of templateSeeds.entries()) {
-    const template = await prisma.workoutTemplate.create({
-      data: {
-        name: seed.name,
-        groupName: seed.groupName,
-        description: seed.description,
-        sortOrder: index,
-        exercises: {
-          create: seed.exercises.map((name, i) => ({
-            exerciseId: exercises[name],
-            sortOrder: i,
-            targetSets: 3,
-            repRange: "8-12",
-          })),
-        },
-      },
-    });
-    templates[seed.name] = template.id;
-  }
+  const allTemplates = await prisma.workoutTemplate.findMany({
+    include: { exercises: { orderBy: { sortOrder: "asc" }, include: { exercise: true } } },
+  });
 
   for (let w = 0; w < 18; w++) {
     const startedAt = new Date(daysAgo(2 + w * 3 + randomInt(0, 2)));
     startedAt.setUTCHours(randomInt(7, 19), randomInt(0, 59), 0, 0);
     const finishedAt = new Date(startedAt.getTime() + randomInt(28, 84) * 60_000);
 
-    const templateSeed = pick(templateSeeds);
+    const template = pick(allTemplates);
     const workout = await prisma.workout.create({
       data: {
-        name: `${templateSeed.name} Workout`,
+        name: `${template.name} Workout`,
         startedAt,
         finishedAt,
-        templateId: templates[templateSeed.name],
+        templateId: template.id,
       },
     });
 
-    // Older workouts are lighter, so the previous-performance column shows a
-    // real progression.
+    // Older workouts are lighter, so the previous-performance column in the
+    // live session shows a real progression rather than noise.
     const progression = (18 - w) / 18;
     const setRows = [];
-    for (const name of templateSeed.exercises.slice(0, randomInt(4, 6))) {
-      const bodyweight = exerciseSeeds.find((e) => e.name === name)?.equipment === "bodyweight";
+
+    for (const entry of template.exercises.slice(0, randomInt(4, 6))) {
+      const exercise = exerciseByName.get(entry.exercise.name);
+      if (!exercise) continue;
+
+      const bodyweight = exercise.equipment === "bodyweight";
       const unit = chance(0.65) ? "lb" : "kg";
       const base = bodyweight ? 0 : randomBetween(unit === "lb" ? 45 : 20, unit === "lb" ? 135 : 60);
 
       for (let s = 1; s <= randomInt(3, 4); s++) {
         setRows.push({
           workoutId: workout.id,
-          exerciseId: exercises[name],
+          exerciseId: exercise.id,
           setNumber: s,
           weight: bodyweight ? null : Math.round((base * (0.85 + progression * 0.2)) / 5) * 5,
           unit,
@@ -459,7 +392,8 @@ async function main() {
         });
       }
     }
-    await prisma.workoutSet.createMany({ data: setRows });
+
+    if (setRows.length > 0) await prisma.workoutSet.createMany({ data: setRows });
   }
 
   // --- Health --------------------------------------------------------------

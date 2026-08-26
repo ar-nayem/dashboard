@@ -76,30 +76,61 @@ export default async function FitnessPage() {
               </h3>
               <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {group.templates.map((template) => (
-                  <form key={template.id} action={startFromTemplate}>
-                    <input type="hidden" name="templateId" value={template.id} />
-                    <button
-                      type="submit"
-                      className="card w-full cursor-pointer text-left transition-colors duration-150 hover:bg-surface-hover"
-                    >
-                      <span className="block text-sm font-medium text-foreground">
-                        {template.name}
-                      </span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {template.exercises.length} exercises ·{" "}
-                        {template.exercises
-                          .slice(0, 3)
-                          .map((entry) => entry.exercise.name)
-                          .join(", ")}
-                        {template.exercises.length > 3 ? "…" : ""}
-                      </span>
-                      {template.description && (
-                        <span className="mt-1.5 block text-[11px] text-faint-foreground">
-                          {template.description}
+                  <div
+                    key={template.id}
+                    className="card flex flex-col transition-colors duration-150 hover:bg-surface-hover"
+                  >
+                    <span className="text-sm font-medium text-foreground">{template.name}</span>
+
+                    {/* Body parts trained, in training order — the whole point
+                        of a split is knowing what a day covers at a glance. */}
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {template.muscleGroups.map((muscle) => (
+                        <span
+                          key={muscle}
+                          className="rounded bg-accent/12 px-1.5 py-0.5 text-[10px] text-accent"
+                        >
+                          {muscle}
                         </span>
-                      )}
-                    </button>
-                  </form>
+                      ))}
+                    </div>
+
+                    <span className="mt-2 block text-[11px] text-muted-foreground">
+                      {template.exerciseCount} exercises · {template.totalSets} sets
+                    </span>
+
+                    {template.description && (
+                      <span className="mt-1 block text-[11px] text-faint-foreground">
+                        {template.description}
+                      </span>
+                    )}
+
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">
+                        Exercises
+                      </summary>
+                      <ul className="mt-1.5 flex flex-col gap-0.5">
+                        {template.exercises.map((entry) => (
+                          <li
+                            key={entry.name}
+                            className="flex items-baseline justify-between gap-2 text-[11px]"
+                          >
+                            <span className="text-foreground/80">{entry.name}</span>
+                            <span className="tnum shrink-0 text-faint-foreground">
+                              {entry.targetSets} × {entry.repRange}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+
+                    <form action={startFromTemplate} className="mt-3">
+                      <input type="hidden" name="templateId" value={template.id} />
+                      <button type="submit" className="btn-ghost w-full py-1.5 text-xs">
+                        Start this
+                      </button>
+                    </form>
+                  </div>
                 ))}
               </div>
             </div>
