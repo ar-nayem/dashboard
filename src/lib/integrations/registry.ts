@@ -6,6 +6,7 @@ import { runGoogleAnalytics } from "./adapters/google-analytics";
 import { runSearchConsole } from "./adapters/search-console";
 import { runAppStore } from "./adapters/app-store";
 import { runRevenueCat } from "./adapters/revenuecat";
+import { runFinanceTracker } from "./adapters/finance-tracker";
 
 /**
  * Every data source the app knows about.
@@ -125,6 +126,26 @@ export const ADAPTERS: Adapter[] = [
       },
     ],
     run: runYouTube,
+  },
+  {
+    key: "finance_tracker",
+    name: "finance.arnayem.top",
+    // Polled every 5 minutes by cron, so anything older than an hour means
+    // the job stopped rather than that you simply haven't entered anything.
+    staleAfterHours: 1,
+    note: "Accounts, transactions, investments and transfers → Finance. One-way mirror; enter data at the source.",
+    implemented: true,
+    credentials: [
+      {
+        env: "FINANCE_TRACKER_DB",
+        hint: "Absolute path to that app's SQLite file on this server — /root/finance-tracker/dev.db. Opened read-only.",
+      },
+      {
+        env: "FINANCE_TRACKER_USER_EMAIL",
+        hint: "Which account to mirror. That install is multi-tenant, so only this user's rows are copied.",
+      },
+    ],
+    run: runFinanceTracker,
   },
   {
     key: "apple_health",

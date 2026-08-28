@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { readFileSync } from "node:fs";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { INTEGRATION_SEED } from "./integration-seed";
@@ -30,6 +31,10 @@ async function main() {
   await prisma.accountSnapshot.deleteMany();
   await prisma.holding.deleteMany();
   await prisma.transaction.deleteMany();
+  await prisma.investmentReturn.deleteMany();
+  await prisma.investmentTopUp.deleteMany();
+  await prisma.investment.deleteMany();
+  await prisma.transfer.deleteMany();
   await prisma.account.deleteMany();
   await prisma.loan.deleteMany();
   await prisma.projectMetric.deleteMany();
@@ -45,6 +50,7 @@ async function main() {
   await prisma.document.deleteMany();
   await prisma.birthday.deleteMany();
   await prisma.shipLog.deleteMany();
+  await prisma.syncRun.deleteMany();
   await prisma.integration.deleteMany();
   await prisma.task.deleteMany();
   await prisma.client.deleteMany();
@@ -52,6 +58,32 @@ async function main() {
   await prisma.habit.deleteMany();
   await prisma.project.deleteMany();
   await prisma.area.deleteMany();
+
+  // Guard against the list above drifting out of date. It silently missed
+  // Transfer, Investment, InvestmentReturn, InvestmentTopUp and SyncRun once
+  // already — a reset that reports "empty" while leaving rows behind is worse
+  // than one that fails, because the leftovers surface later as phantom data.
+  // Model names come from the schema file rather than Prisma.dmmf, which the
+  // generated client in Prisma 7 does not expose.
+  const schema = readFileSync(new URL("schema.prisma", import.meta.url), "utf8");
+  const modelNames = [...schema.matchAll(/^model\s+(\w+)/gm)].map((match) => match[1]);
+
+  const leftovers: string[] = [];
+  for (const name of modelNames) {
+    const delegate = (prisma as unknown as Record<string, { count?: () => Promise<number> }>)[
+      name.charAt(0).toLowerCase() + name.slice(1)
+    ];
+    if (!delegate?.count) continue;
+    const remaining = await delegate.count();
+    if (remaining > 0) leftovers.push(`${name} (${remaining})`);
+  }
+
+  if (leftovers.length > 0) {
+    throw new Error(
+      `Reset left rows behind in: ${leftovers.join(", ")}.\n` +
+        "Add the missing deleteMany() calls above — the database is NOT empty.",
+    );
+  }
 
   console.log("Creating the integration registry…");
   await prisma.integration.createMany({ data: INTEGRATION_SEED });
