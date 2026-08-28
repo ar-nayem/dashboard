@@ -75,6 +75,23 @@ export function formatCompactCurrency(value: number, currency = "USD"): string {
   });
 }
 
+/**
+ * Compact figures across several currencies, joined rather than summed —
+ * "RMB 25.5K + BDT 55.1K" instead of a single misleading total.
+ *
+ * Used anywhere a tile would otherwise need one $-prefixed number but the
+ * underlying data spans currencies with no reliable rate between them.
+ */
+export function formatMultiCurrencyCompact(
+  rows: { currency: string; current: number }[],
+): string {
+  if (rows.length === 0) return "—";
+  return rows
+    .filter((row) => row.current !== 0)
+    .map((row) => formatCompactCurrency(row.current, row.currency))
+    .join(" + ") || formatCompactCurrency(0, rows[0].currency);
+}
+
 export function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }

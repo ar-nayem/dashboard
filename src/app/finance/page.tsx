@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { verifySession } from "@/lib/session";
 import { MetricTile } from "@/components/metric-tile";
 import { SegmentedControl } from "@/components/segmented-control";
 import { LineChart } from "@/components/charts/line-chart";
 import { BarChart } from "@/components/charts/bar-chart";
+import { PieChart } from "@/components/charts/pie-chart";
 import { ProgressBar } from "@/components/charts/progress-bar";
 import { EmptyState } from "@/components/empty-state";
 import { StatusChip } from "@/components/chips";
@@ -12,10 +14,14 @@ import { prisma } from "@/lib/prisma";
 import {
   getBalancesByCurrency,
   getCurrenciesInUse,
+  getExpenseBreakdownByCurrency,
   getExpensesByCurrency,
+  getIncomeBreakdownByCurrency,
   getIncomeByCurrency,
   getInvestments,
+  getMonthlyCashflowByCurrency,
   getNetSavingsByCurrency,
+  getRecentTransactionsByCurrency,
   getTransfers,
 } from "@/lib/data-finance";
 import { MONEY_PERIODS, MONEY_PERIOD_OPTIONS, type MoneyPeriod } from "@/lib/periods";
@@ -38,6 +44,7 @@ import {
   getExpenseBreakdown,
   getHoldings,
   getIncome,
+  getIncomeBreakdown,
   getLoans,
   getMonthlyCashflow,
   getNetSavings,
@@ -68,13 +75,18 @@ const TABS = [
 export default async function FinancePage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; period?: string }>;
+  searchParams: Promise<{ tab?: string; period?: string; currency?: string; breakdown?: string }>;
 }) {
   await verifySession();
 
   const params = await searchParams;
   const tab = TABS.some((t) => t.key === params.tab) ? params.tab! : "overview";
   const period = parseEnum(MONEY_PERIODS, params.period) as MoneyPeriod;
+  // Which currency the Income tab is filtered to, when arriving from an
+  // Overview currency card. Validated against real data inside IncomeTab
+  // itself, since the list of currencies in use requires a query.
+  const currency = params.currency?.trim() || undefined;
+  const breakdown = params.breakdown?.trim() || undefined;
 
   function hrefFor(nextTab: string) {
     return `/finance?tab=${nextTab}&period=${period}`;
@@ -100,7 +112,7 @@ export default async function FinancePage({
       </div>
 
       {tab === "overview" && <OverviewTab period={period} />}
-      {tab === "income" && <IncomeTab period={period} />}
+      {tab === "income" && <IncomeTab period={period} currency={currency} breakdown={breakdown} />}
       {tab === "investments" && <InvestmentsTab />}
       {tab === "transfers" && <TransfersTab />}
       {tab === "accounts" && <AccountsTab />}
@@ -168,84 +180,20 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
             together — a combined total would look authoritative and mean nothing.
           </div>
 
-          <section className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {balancesByCurrency.map((balance) => (
-              <div key={balance.currency} className="tile">
-                <span className="tile-label">Balance · {balance.currency}</span>
-                <span className="tile-value">
-                  <Private chars={6}>
-                    {formatCurrency(balance.total, balance.currency)}
-                  </Private>
-                </span>
-                <span className="text-xs text-faint-foreground">
-                  across {balance.accounts} account{balance.accounts === 1 ? "" : "s"}
-                </span>
-              </div>
+          <div className="mt-4 flex justify-end">{toggle}</div>
+
+          <section className="mt-3 flex flex-col gap-8">
+            {currencies.map((currency) => (
+              <CurrencySection
+                key={currency}
+                currency={currency}
+                period={period}
+                balance={balancesByCurrency.find((row) => row.currency === currency) ?? null}
+                income={incomeByCurrency.find((row) => row.currency === currency) ?? null}
+                expense={expensesByCurrency.find((row) => row.currency === currency) ?? null}
+                saving={savingsByCurrency.find((row) => row.currency === currency) ?? null}
+              />
             ))}
-          </section>
-
-          <section className="mt-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="section-title">This period, by currency</h2>
-              {toggle}
-            </div>
-
-            <div className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {currencies.map((currency) => {
-                const income = incomeByCurrency.find((row) => row.currency === currency);
-                const expense = expensesByCurrency.find((row) => row.currency === currency);
-                const saving = savingsByCurrency.find((row) => row.currency === currency);
-
-                // Savings rate is a ratio within one currency, so it stays
-                // meaningful here where a cross-currency version would not.
-                const rate =
-                  income && income.current > 0 && saving
-                    ? (saving.current / income.current) * 100
-                    : null;
-
-                return (
-                  <div key={currency} className="card">
-                    <h3 className="text-sm font-medium text-foreground">{currency}</h3>
-                    <dl className="mt-3 flex flex-col gap-2 text-sm">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <dt className="text-muted-foreground">Income</dt>
-                        <dd className="tnum text-success">
-                          <Private chars={5}>
-                            {formatCurrency(income?.current ?? 0, currency)}
-                          </Private>
-                        </dd>
-                      </div>
-                      <div className="flex items-baseline justify-between gap-2">
-                        <dt className="text-muted-foreground">Expenses</dt>
-                        <dd className="tnum text-danger">
-                          <Private chars={5}>
-                            {formatCurrency(expense?.current ?? 0, currency)}
-                          </Private>
-                        </dd>
-                      </div>
-                      <div className="flex items-baseline justify-between gap-2 border-t border-border pt-2">
-                        <dt className="text-foreground/80">Net</dt>
-                        <dd
-                          className={`tnum font-medium ${
-                            (saving?.current ?? 0) >= 0 ? "text-foreground" : "text-danger"
-                          }`}
-                        >
-                          <Private chars={5}>
-                            {formatCurrency(saving?.current ?? 0, currency)}
-                          </Private>
-                        </dd>
-                      </div>
-                      {rate !== null && (
-                        <div className="flex items-baseline justify-between gap-2">
-                          <dt className="text-muted-foreground">Savings rate</dt>
-                          <dd className="tnum text-foreground/80">{rate.toFixed(1)}%</dd>
-                        </div>
-                      )}
-                    </dl>
-                  </div>
-                );
-              })}
-            </div>
           </section>
         </>
       )}
@@ -350,30 +298,269 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
 
 // ---------------------------------------------------------------------------
 
-async function IncomeTab({ period }: { period: MoneyPeriod }) {
-  const [cashflow, breakdown, income, accounts, projects, recent] = await Promise.all([
-    getMonthlyCashflow(12),
-    getExpenseBreakdown(period),
+/**
+ * Everything for one currency on the multi-currency Overview: a clickable
+ * hero card, a trend chart, a spending breakdown, and a peek at recent
+ * activity. This is the per-currency equivalent of finance-tracker's own
+ * home page — same information, never summed across currencies.
+ */
+async function CurrencySection({
+  currency,
+  period,
+  balance,
+  income,
+  expense,
+  saving,
+}: {
+  currency: string;
+  period: MoneyPeriod;
+  balance: { total: number; accounts: number } | null;
+  income: { current: number; delta: number | null } | null;
+  expense: { current: number; delta: number | null } | null;
+  saving: { current: number; delta: number | null } | null;
+}) {
+  const [cashflow, breakdown, recent] = await Promise.all([
+    getMonthlyCashflowByCurrency(currency, 12),
+    getExpenseBreakdownByCurrency(currency, period),
+    getRecentTransactionsByCurrency(currency, 6),
+  ]);
+
+  const rate =
+    income && income.current > 0 && saving ? (saving.current / income.current) * 100 : null;
+  const incomeHref = `/finance?tab=income&period=${period}&currency=${encodeURIComponent(currency)}`;
+
+  return (
+    <div className="rounded-2xl border border-border">
+      {/* Hero — the whole header is a stretched link into the filtered
+          Income tab, same pattern as MetricTile's href. */}
+      <Link
+        href={incomeHref}
+        className="relative block rounded-t-2xl border-b border-border bg-surface-hover/40 px-5 py-4 transition-colors duration-150 hover:bg-surface-hover"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              {currency}
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="tnum text-2xl font-semibold text-foreground">
+                <Private chars={6}>{formatCurrency(balance?.total ?? 0, currency)}</Private>
+              </span>
+              {balance && (
+                <span className="text-xs text-faint-foreground">
+                  across {balance.accounts} account{balance.accounts === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+          </div>
+          <span className="text-xs font-medium text-accent">View {currency} details →</span>
+        </div>
+
+        <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div>
+            <dt className="text-[11px] text-muted-foreground">Income</dt>
+            <dd className="tnum text-sm text-success">
+              <Private chars={5}>{formatCurrency(income?.current ?? 0, currency)}</Private>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] text-muted-foreground">Expenses</dt>
+            <dd className="tnum text-sm text-danger">
+              <Private chars={5}>{formatCurrency(expense?.current ?? 0, currency)}</Private>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] text-muted-foreground">Net</dt>
+            <dd
+              className={`tnum text-sm font-medium ${
+                (saving?.current ?? 0) >= 0 ? "text-foreground" : "text-danger"
+              }`}
+            >
+              <Private chars={5}>{formatCurrency(saving?.current ?? 0, currency)}</Private>
+            </dd>
+          </div>
+          {rate !== null && (
+            <div>
+              <dt className="text-[11px] text-muted-foreground">Savings rate</dt>
+              <dd className="tnum text-sm text-foreground/80">{rate.toFixed(1)}%</dd>
+            </div>
+          )}
+        </dl>
+      </Link>
+
+      <div className="grid gap-4 p-5 lg:grid-cols-2">
+        <div>
+          <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Income vs expenses — {currency}
+          </h3>
+          <div className="mt-3">
+            <LineChart
+              series={[
+                {
+                  name: "Income",
+                  points: cashflow.map((m) => ({ x: m.date.getTime(), y: m.income })),
+                  color: "var(--success)",
+                },
+                {
+                  name: "Expenses",
+                  points: cashflow.map((m) => ({ x: m.date.getTime(), y: m.expenses })),
+                  color: "var(--danger)",
+                },
+              ]}
+              height={200}
+              zeroBased
+              formatY={(v) => formatCompactCurrency(v, currency)}
+              formatX={(v) => formatShortDate(new Date(v))}
+              ariaLabel={`${currency} income versus expenses by month`}
+            />
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Spending by category — {currency}
+          </h3>
+          <div className="mt-3">
+            <PieChart
+              slices={breakdown.map((row) => ({ label: row.category, value: row.total }))}
+              formatValue={(v) => formatCompactCurrency(v, currency)}
+              ariaLabel={`${currency} spending by category`}
+            />
+          </div>
+        </div>
+      </div>
+
+      {recent.length > 0 && (
+        <div className="border-t border-border px-5 py-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Recent — {currency}
+            </h3>
+            <Link href={incomeHref} className="text-xs text-accent hover:underline">
+              View all →
+            </Link>
+          </div>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {recent.map((transaction) => (
+              <div key={transaction.id} className="flex items-center justify-between gap-3 text-sm">
+                <span className="min-w-0 flex-1 truncate text-foreground/90">
+                  {transaction.description || transaction.category || "—"}
+                  <span className="ml-2 text-[11px] text-faint-foreground">
+                    {formatShortDate(transaction.date)}
+                    {transaction.account && ` · ${transaction.account.name}`}
+                  </span>
+                </span>
+                <span
+                  className={`tnum shrink-0 ${
+                    transaction.kind === "income" ? "text-success" : "text-muted-foreground"
+                  }`}
+                >
+                  {transaction.kind === "income" ? "+" : "−"}
+                  <Private chars={4}>{formatCurrency(transaction.amount, currency)}</Private>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+async function IncomeTab({
+  period,
+  currency,
+  breakdown: breakdownTabParam,
+}: {
+  period: MoneyPeriod;
+  currency?: string;
+  breakdown?: string;
+}) {
+  const breakdownTab = breakdownTabParam === "income" ? "income" : "spending";
+  const allCurrencies = await getCurrenciesInUse();
+  // A currency arriving via the query string is only trusted once it matches
+  // something real.
+  const requested = currency && allCurrencies.includes(currency) ? currency : undefined;
+
+  // With more than one currency in play, this tab must never fall through to
+  // the currency-blind sum functions below — that would blend RMB and BDT
+  // into one figure and label it with whichever currency happened to be
+  // requested, which is exactly the "confident, meaningless number" this
+  // app's whole currency-safety design exists to prevent. So a multi-currency
+  // visit with no (or an invalid) currency in the URL is redirected to the
+  // first currency rather than silently rendering a blended view.
+  if (!requested && allCurrencies.length > 1) {
+    redirect(
+      `/finance?tab=income&period=${period}&currency=${encodeURIComponent(allCurrencies[0])}`,
+    );
+  }
+
+  const activeCurrency = requested;
+
+  const breakdownReader =
+    breakdownTab === "income"
+      ? activeCurrency
+        ? getIncomeBreakdownByCurrency(activeCurrency, period)
+        : getIncomeBreakdown(period)
+      : activeCurrency
+        ? getExpenseBreakdownByCurrency(activeCurrency, period)
+        : getExpenseBreakdown(period);
+
+  const [cashflow, breakdown, income, incomeByCurrency, accounts, projects, recent] = await Promise.all([
+    activeCurrency ? getMonthlyCashflowByCurrency(activeCurrency, 12) : getMonthlyCashflow(12),
+    breakdownReader,
     getIncome(period),
+    getIncomeByCurrency(period),
     getAccountsWithBalances(),
     prisma.project.findMany({
       where: { status: { not: "archived" } },
       orderBy: { sortOrder: "asc" },
       select: { id: true, name: true },
     }),
-    prisma.transaction.findMany({
-      orderBy: { date: "desc" },
-      take: 15,
-      include: { account: { select: { name: true } } },
-    }),
+    activeCurrency
+      ? getRecentTransactionsByCurrency(activeCurrency, 15)
+      : prisma.transaction.findMany({
+          orderBy: { date: "desc" },
+          take: 15,
+          include: { account: { select: { name: true } } },
+        }),
   ]);
 
   const biggest = breakdown[0]?.total ?? 0;
+  // getIncome() sums blindly across every currency — only safe to show
+  // as-is in the single-currency case. When filtered to one currency, the
+  // matching row from the currency-aware version is used instead, so this
+  // figure is never a blended total wearing one currency's label.
+  const displayIncome = activeCurrency
+    ? (incomeByCurrency.find((row) => row.currency === activeCurrency)?.current ?? 0)
+    : income.current;
+  const currencyHref = (value?: string) =>
+    `/finance?tab=income&period=${period}${value ? `&currency=${encodeURIComponent(value)}` : ""}`;
 
   return (
     <>
-      <section className="mt-6 card">
-        <h2 className="section-title">Income vs expenses — last 12 months</h2>
+      {allCurrencies.length > 1 && (
+        <div className="mt-6 flex flex-wrap gap-1.5">
+          {allCurrencies.map((entry) => (
+            <Link
+              key={entry}
+              href={currencyHref(entry)}
+              className={`btn-ghost px-3 py-1 text-xs ${
+                activeCurrency === entry ? "bg-accent/15 text-accent" : ""
+              }`}
+            >
+              {entry}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      <section className={`card ${allCurrencies.length > 1 ? "mt-3" : "mt-6"}`}>
+        <h2 className="section-title">
+          Income vs expenses{activeCurrency ? ` — ${activeCurrency}` : ""} — last 12 months
+        </h2>
         <div className="mt-4">
           <LineChart
             series={[
@@ -390,7 +577,7 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
             ]}
             height={240}
             zeroBased
-            formatY={(v) => formatCompactCurrency(v)}
+            formatY={(v) => formatCompactCurrency(v, activeCurrency)}
             formatX={(v) => formatShortDate(new Date(v))}
             ariaLabel="Monthly income versus expenses"
           />
@@ -398,7 +585,7 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
       </section>
 
       <section className="mt-4 card">
-        <h2 className="section-title">Net per month</h2>
+        <h2 className="section-title">Net per month{activeCurrency ? ` — ${activeCurrency}` : ""}</h2>
         <div className="mt-4">
           <BarChart
             bars={cashflow.map((m) => ({
@@ -406,27 +593,69 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
               value: Math.round(m.income - m.expenses),
               color: m.income - m.expenses >= 0 ? "var(--success)" : "var(--danger)",
             }))}
-            formatY={(v) => formatCompactCurrency(v)}
+            formatY={(v) => formatCompactCurrency(v, activeCurrency)}
             ariaLabel="Net income per month"
           />
         </div>
       </section>
 
       <section className="mt-4 card">
-        <div className="flex items-center justify-between">
-          <h2 className="section-title">Spending by category</h2>
-          <span className="text-xs text-muted-foreground">
-            Income <Private chars={5}>{formatCurrency(income.current)}</Private>
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="section-title">
+              {breakdownTab === "income" ? "Income" : "Spending"} by category
+              {activeCurrency ? ` — ${activeCurrency}` : ""}
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Income this period{" "}
+              <Private chars={5}>{formatCurrency(displayIncome, activeCurrency)}</Private>
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {(
+              [
+                ["spending", "Spending"],
+                ["income", "Income"],
+              ] as const
+            ).map(([tabKey, label]) => (
+              <Link
+                key={tabKey}
+                href={`/finance?tab=income&period=${period}${activeCurrency ? `&currency=${encodeURIComponent(activeCurrency)}` : ""}&breakdown=${tabKey}`}
+                scroll={false}
+                className={`btn-ghost px-2.5 py-1 text-xs ${
+                  breakdownTab === tabKey ? "bg-accent/15 text-accent" : ""
+                }`}
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
         </div>
-        <div className="mt-4 flex flex-col gap-3">
-          {breakdown.length === 0 && <EmptyState message="No expenses in this period." />}
+        <div className="mt-4">
+          {breakdown.length === 0 ? (
+            <EmptyState
+              message={
+                breakdownTab === "income" ? "No income in this period." : "No expenses in this period."
+              }
+            />
+          ) : (
+            <PieChart
+              slices={breakdown.map((row) => ({ label: row.category, value: row.total }))}
+              formatValue={(v) => formatCompactCurrency(v, activeCurrency)}
+              ariaLabel={`${breakdownTab === "income" ? "Income" : "Spending"} by category`}
+            />
+          )}
+        </div>
+
+        {/* The bars underneath give exact figures the pie's hover title
+            would otherwise hide behind a mouse-only interaction. */}
+        <div className="mt-5 flex flex-col gap-3">
           {breakdown.map((row) => (
             <div key={row.category} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-foreground/90">{row.category}</span>
                 <span className="tnum text-muted-foreground">
-                  <Private chars={5}>{formatCurrency(row.total)}</Private>
+                  <Private chars={5}>{formatCurrency(row.total, activeCurrency)}</Private>
                 </span>
               </div>
               <ProgressBar
@@ -457,6 +686,18 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
               Amount
             </label>
             <input id="amount" name="amount" type="number" step="any" required className="input mt-1" />
+          </div>
+          <div>
+            <label htmlFor="currency" className="field-label">
+              Currency
+            </label>
+            <input
+              id="currency"
+              name="currency"
+              maxLength={6}
+              defaultValue={activeCurrency ?? "USD"}
+              className="input mt-1 uppercase"
+            />
           </div>
           <div>
             <label htmlFor="date" className="field-label">
@@ -509,12 +750,16 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
           </div>
         </form>
         <p className="mt-2 text-xs text-faint-foreground">
-          Enter the amount as a positive number — the type field carries the direction.
+          Enter the amount as a positive number — the type field carries the direction. This form
+          is for one-off manual entries; anything entered at finance.arnayem.top arrives here on
+          its own.
         </p>
       </section>
 
       <section className="mt-6 card">
-        <h2 className="section-title">Recent transactions</h2>
+        <h2 className="section-title">
+          Recent transactions{activeCurrency ? ` — ${activeCurrency}` : ""}
+        </h2>
         <div className="mt-3 flex flex-col gap-1.5">
           {recent.length === 0 && <p className="text-sm text-muted-foreground">None yet.</p>}
           {recent.map((transaction) => (
@@ -532,7 +777,7 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
                 }`}
               >
                 {transaction.kind === "income" ? "+" : "−"}
-                <Private chars={4}>{formatCurrency(transaction.amount)}</Private>
+                <Private chars={4}>{formatCurrency(transaction.amount, transaction.currency)}</Private>
               </span>
               <form action={deleteTransaction} className="shrink-0">
                 <input type="hidden" name="id" value={transaction.id} />
@@ -790,7 +1035,8 @@ async function InvestmentsTab() {
 // ---------------------------------------------------------------------------
 
 async function AccountsTab() {
-  const accounts = await getAccountsWithBalances();
+  const [accounts, currencies] = await Promise.all([getAccountsWithBalances(), getCurrenciesInUse()]);
+  const multiCurrency = currencies.length > 1;
 
   return (
     <>
@@ -801,59 +1047,81 @@ async function AccountsTab() {
           </div>
         )}
 
-        {accounts.map((account) => (
-          <div key={account.id} className="tile">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm text-foreground">{account.name}</span>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="badge px-2 py-0.5 text-[10px]">{account.kind}</span>
-                <form action={deleteAccount}>
-                  <input type="hidden" name="id" value={account.id} />
-                  <button
-                    type="submit"
-                    aria-label={`Delete ${account.name}`}
-                    className="cursor-pointer text-xs text-faint-foreground hover:text-danger"
-                  >
-                    ✕
+        {accounts.map((account) => {
+          const synced = account.source === "finance-tracker";
+          return (
+            <div key={account.id} className="tile">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm text-foreground">{account.name}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="badge px-2 py-0.5 text-[10px]">{account.kind}</span>
+                  {/* Deleting a synced account is harmless — the next push
+                      recreates it, keyed on the same externalId — but the
+                      control is hidden anyway so it doesn't read as a real
+                      action to take here. */}
+                  {!synced && (
+                    <form action={deleteAccount}>
+                      <input type="hidden" name="id" value={account.id} />
+                      <button
+                        type="submit"
+                        aria-label={`Delete ${account.name}`}
+                        className="cursor-pointer text-xs text-faint-foreground hover:text-danger"
+                      >
+                        ✕
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+
+              <span
+                className={`tnum mt-3 block text-xl font-semibold ${
+                  account.balance < 0 ? "text-danger" : "text-foreground"
+                }`}
+              >
+                <Private chars={6}>{formatCurrency(account.balance, account.currency)}</Private>
+              </span>
+
+              {synced ? (
+                <span className="mt-1 flex items-center gap-1 text-xs text-info">
+                  <span className="h-1.5 w-1.5 rounded-full bg-info" aria-hidden="true" />
+                  live from finance.arnayem.top
+                </span>
+              ) : (
+                account.asOf && (
+                  <span className="mt-1 block text-xs text-faint-foreground">
+                    as of {formatDate(account.asOf)}
+                  </span>
+                )
+              )}
+
+              {!synced && (
+                <form action={updateAccountBalance} className="mt-3 flex gap-1.5">
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <input
+                    name="balance"
+                    type="number"
+                    step="any"
+                    placeholder="New balance"
+                    aria-label={`Update balance for ${account.name}`}
+                    className="input flex-1 px-2 py-1 text-xs"
+                  />
+                  <button type="submit" className="btn-ghost px-2.5 py-1 text-xs">
+                    Save
                   </button>
                 </form>
-              </div>
+              )}
             </div>
-
-            <span
-              className={`tnum mt-3 block text-xl font-semibold ${
-                account.balance < 0 ? "text-danger" : "text-foreground"
-              }`}
-            >
-              <Private chars={6}>{formatCurrency(account.balance)}</Private>
-            </span>
-            {account.asOf && (
-              <span className="mt-1 block text-xs text-faint-foreground">
-                as of {formatDate(account.asOf)}
-              </span>
-            )}
-
-            <form action={updateAccountBalance} className="mt-3 flex gap-1.5">
-              <input type="hidden" name="accountId" value={account.id} />
-              <input
-                name="balance"
-                type="number"
-                step="any"
-                placeholder="New balance"
-                aria-label={`Update balance for ${account.name}`}
-                className="input flex-1 px-2 py-1 text-xs"
-              />
-              <button type="submit" className="btn-ghost px-2.5 py-1 text-xs">
-                Save
-              </button>
-            </form>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       <p className="mt-3 text-xs text-faint-foreground">
-        Net worth is the sum of each account&apos;s most recent balance. Loans are stored as
-        negative, so enter them as a positive number and the sign is handled for you.
+        {multiCurrency
+          ? "Each account shows its own balance in its own currency — see Overview for the per-currency totals, since there is no reliable rate to combine them."
+          : "Net worth is the sum of each account's most recent balance."}{" "}
+        Loans are stored as negative, so enter them as a positive number and the sign is handled
+        for you.
       </p>
 
       <section className="mt-6">

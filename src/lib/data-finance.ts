@@ -88,13 +88,20 @@ export async function getSideProjectRevenue(period: MoneyPeriod): Promise<Period
  * contributes its last known value instead of dropping to zero.
  */
 export async function getCurrentNetWorth(): Promise<number> {
-  const accounts = await prisma.account.findMany({
-    where: { active: true },
-    select: {
-      snapshots: { orderBy: { date: "desc" }, take: 1, select: { balance: true } },
-    },
-  });
-  return accounts.reduce((total, account) => total + (account.snapshots[0]?.balance ?? 0), 0);
+  const [accounts, computed] = await Promise.all([
+    prisma.account.findMany({
+      where: { active: true },
+      select: {
+        id: true,
+        snapshots: { orderBy: { date: "desc" }, take: 1, select: { balance: true } },
+      },
+    }),
+    getComputedBalances(),
+  ]);
+  return accounts.reduce(
+    (total, account) => total + (computed.get(account.id) ?? account.snapshots[0]?.balance ?? 0),
+    0,
+  );
 }
 
 export type NetWorthPoint = { date: Date; total: number; liquid: number };
@@ -170,17 +177,95 @@ export async function getHourlyRate(period: MoneyPeriod): Promise<PeriodTotal> {
   return toPeriodTotal(income.current / hours, income.previous / hours);
 }
 
-export async function getAccountsWithBalances() {
+/**
+ * Live balance for every finance-tracker-mirrored account, computed from its
+ * transaction ledger rather than a stored snapshot.
+ *
+ * The push never writes AccountSnapshot rows — finance-tracker has no such
+ * concept, and neither does its own home page: it computes "available
+ * balance" the same way every time it renders. Without this, every mirrored
+ * account silently reads as a $0 balance, which is exactly what the Net
+ * Worth tile showed before this existed.
+ *
+ * The formula is copied verbatim from finance-tracker's own
+ * computeAvailableBalance() (src/lib/data.ts) rather than approximated, so
+ * the two apps agree on what an account is actually worth:
+ *
+ *   available = (income − expense on this account)
+ *             − (amount invested from this account, incl. top-ups)
+ *             + (returns paid back to this account)
+ *             + (transfers in) − (transfers out)
+ *
+ * Manually-entered accounts are untouched — those still use AccountSnapshot,
+ * because a manual account has no promise that every transaction against it
+ * was ever logged, so deriving its balance from a partial ledger would be
+ * worse than the number you typed in yourself.
+ */
+async function getComputedBalances(): Promise<Map<string, number>> {
   const accounts = await prisma.account.findMany({
-    where: { active: true },
-    orderBy: { sortOrder: "asc" },
-    include: { snapshots: { orderBy: { date: "desc" }, take: 1 } },
+    where: { source: "finance-tracker" },
+    select: {
+      id: true,
+      transactions: { select: { kind: true, amount: true } },
+      investments: {
+        select: {
+          amount: true,
+          topUps: { select: { amount: true } },
+          returns: { select: { amount: true } },
+        },
+      },
+      transfersOut: { select: { fromAmount: true } },
+      transfersIn: { select: { toAmount: true } },
+    },
   });
-  return accounts.map((account) => ({
-    ...account,
-    balance: account.snapshots[0]?.balance ?? 0,
-    asOf: account.snapshots[0]?.date ?? null,
-  }));
+
+  const balances = new Map<string, number>();
+
+  for (const account of accounts) {
+    const transactionBalance = account.transactions.reduce(
+      (sum, t) => sum + (t.kind === "income" ? t.amount : -t.amount),
+      0,
+    );
+    const totalInvested = account.investments.reduce(
+      (sum, i) => sum + i.amount + i.topUps.reduce((s, t) => s + t.amount, 0),
+      0,
+    );
+    const totalReturned = account.investments.reduce(
+      (sum, i) => sum + i.returns.reduce((s, r) => s + r.amount, 0),
+      0,
+    );
+    const transferredOut = account.transfersOut.reduce((sum, t) => sum + t.fromAmount, 0);
+    const transferredIn = account.transfersIn.reduce((sum, t) => sum + t.toAmount, 0);
+
+    balances.set(
+      account.id,
+      transactionBalance - totalInvested + totalReturned + transferredIn - transferredOut,
+    );
+  }
+
+  return balances;
+}
+
+export async function getAccountsWithBalances() {
+  const [accounts, computed] = await Promise.all([
+    prisma.account.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: "asc" },
+      include: { snapshots: { orderBy: { date: "desc" }, take: 1 } },
+    }),
+    getComputedBalances(),
+  ]);
+
+  return accounts.map((account) => {
+    const live = computed.get(account.id);
+    return {
+      ...account,
+      balance: live ?? account.snapshots[0]?.balance ?? 0,
+      // A live-computed balance has no meaningful "as of" date — it reflects
+      // this instant, not a snapshot moment — so that field stays null for it.
+      asOf: live !== undefined ? null : (account.snapshots[0]?.date ?? null),
+    };
+  });
 }
 
 export async function getHoldings() {
@@ -201,6 +286,19 @@ export async function getExpenseBreakdown(period: MoneyPeriod) {
     by: ["category"],
     _sum: { amount: true },
     where: { kind: "expense", date: { gte: current.start, lte: current.end } },
+  });
+  return grouped
+    .map((row) => ({ category: row.category ?? "Uncategorised", total: row._sum.amount ?? 0 }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/** Income totals by category over a period, largest first. */
+export async function getIncomeBreakdown(period: MoneyPeriod) {
+  const { current } = moneyRange(period);
+  const grouped = await prisma.transaction.groupBy({
+    by: ["category"],
+    _sum: { amount: true },
+    where: { kind: "income", date: { gte: current.start, lte: current.end } },
   });
   return grouped
     .map((row) => ({ category: row.category ?? "Uncategorised", total: row._sum.amount ?? 0 }))
@@ -330,19 +428,24 @@ export type CurrencyBalance = { currency: string; total: number; accounts: numbe
  * top of this section.
  */
 export async function getBalancesByCurrency(): Promise<CurrencyBalance[]> {
-  const accounts = await prisma.account.findMany({
-    where: { active: true },
-    select: {
-      currency: true,
-      snapshots: { orderBy: { date: "desc" }, take: 1, select: { balance: true } },
-    },
-  });
+  const [accounts, computed] = await Promise.all([
+    prisma.account.findMany({
+      where: { active: true },
+      select: {
+        id: true,
+        currency: true,
+        snapshots: { orderBy: { date: "desc" }, take: 1, select: { balance: true } },
+      },
+    }),
+    getComputedBalances(),
+  ]);
 
   const byCurrency = new Map<string, CurrencyBalance>();
   for (const account of accounts) {
-    const balance = account.snapshots[0]?.balance;
-    // An account with no snapshot has no known balance. Counting it as zero
-    // would understate net worth and look like a real reading.
+    const balance = computed.get(account.id) ?? account.snapshots[0]?.balance;
+    // An account with neither a live-computed balance nor a snapshot has no
+    // known balance. Counting it as zero would understate the total and look
+    // like a real reading rather than an absence of data.
     if (balance === undefined) continue;
 
     const entry = byCurrency.get(account.currency) ?? {
@@ -390,5 +493,81 @@ export async function getTransfers(limit = 25) {
       fromAccount: { select: { name: true, currency: true } },
       toAccount: { select: { name: true, currency: true } },
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Currency-aware breakdowns and trends
+// ---------------------------------------------------------------------------
+
+export type CategoryTotal = { category: string; total: number };
+
+/** Expense totals by category, filtered to one currency — largest first. */
+export async function getExpenseBreakdownByCurrency(
+  currency: string,
+  period: MoneyPeriod,
+): Promise<CategoryTotal[]> {
+  const { current } = moneyRange(period);
+  const grouped = await prisma.transaction.groupBy({
+    by: ["category"],
+    _sum: { amount: true },
+    where: { kind: "expense", currency, date: { gte: current.start, lte: current.end } },
+  });
+  return grouped
+    .map((row) => ({ category: row.category ?? "Uncategorised", total: row._sum.amount ?? 0 }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/** Income totals by category, filtered to one currency — largest first. */
+export async function getIncomeBreakdownByCurrency(
+  currency: string,
+  period: MoneyPeriod,
+): Promise<CategoryTotal[]> {
+  const { current } = moneyRange(period);
+  const grouped = await prisma.transaction.groupBy({
+    by: ["category"],
+    _sum: { amount: true },
+    where: { kind: "income", currency, date: { gte: current.start, lte: current.end } },
+  });
+  return grouped
+    .map((row) => ({ category: row.category ?? "Uncategorised", total: row._sum.amount ?? 0 }))
+    .sort((a, b) => b.total - a.total);
+}
+
+export type MonthlyCashflow = { date: Date; income: number; expenses: number };
+
+/** Monthly income vs expense totals for one currency over the last N months. */
+export async function getMonthlyCashflowByCurrency(
+  currency: string,
+  months = 12,
+): Promise<MonthlyCashflow[]> {
+  const transactions = await prisma.transaction.findMany({
+    where: { currency },
+    orderBy: { date: "asc" },
+    select: { date: true, amount: true, kind: true },
+  });
+
+  const byMonth = new Map<string, MonthlyCashflow>();
+  for (const transaction of transactions) {
+    const date = new Date(
+      Date.UTC(transaction.date.getUTCFullYear(), transaction.date.getUTCMonth(), 1),
+    );
+    const key = date.toISOString();
+    const entry = byMonth.get(key) ?? { date, income: 0, expenses: 0 };
+    if (transaction.kind === "income") entry.income += transaction.amount;
+    else entry.expenses += transaction.amount;
+    byMonth.set(key, entry);
+  }
+
+  return [...byMonth.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-months);
+}
+
+/** Recent transactions in one currency, newest first. */
+export async function getRecentTransactionsByCurrency(currency: string, limit = 8) {
+  return prisma.transaction.findMany({
+    where: { currency },
+    orderBy: { date: "desc" },
+    take: limit,
+    include: { account: { select: { name: true } } },
   });
 }

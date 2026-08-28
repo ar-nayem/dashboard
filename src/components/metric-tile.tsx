@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ProgressBar } from "@/components/charts/progress-bar";
 import { Sparkline } from "@/components/charts/sparkline";
 import { Private } from "@/components/private";
@@ -9,6 +10,12 @@ import { formatPercentDelta } from "@/lib/format";
  * `deltaGood` decides the colour of the delta independently of its sign,
  * because "up" is not always good — resting heart rate rising is bad, net
  * worth rising is good. Pass null for a neutral grey delta.
+ *
+ * `href` uses the "stretched link" pattern rather than wrapping the whole
+ * tile in a <Link>: a toggle is itself a row of <Link>s, and nesting an
+ * anchor inside another anchor is invalid HTML. The stretched link sits
+ * beneath everything (z-0) and the toggle sits above it (z-10), so the whole
+ * card is a click target except where a more specific control already is.
  */
 export function MetricTile({
   label,
@@ -25,6 +32,7 @@ export function MetricTile({
   footnote,
   badge,
   toggle,
+  href,
   sensitive = true,
   maskChars = 6,
 }: {
@@ -44,6 +52,8 @@ export function MetricTile({
   badge?: React.ReactNode;
   /** A <SegmentedControl>, shown top-right. */
   toggle?: React.ReactNode;
+  /** Makes the whole tile a link to more detail — see note above. */
+  href?: string;
   /** Hide the value under privacy mode. True for money, false for counts. */
   sensitive?: boolean;
   maskChars?: number;
@@ -56,13 +66,21 @@ export function MetricTile({
         : "text-danger";
 
   return (
-    <div className="tile flex flex-col">
-      <div className="flex items-start justify-between gap-2">
+    <div
+      className={`tile relative flex flex-col ${
+        href ? "transition-colors duration-150 hover:bg-surface-hover" : ""
+      }`}
+    >
+      {href && (
+        <Link href={href} className="absolute inset-0 z-0" aria-label={`View ${label} details`} />
+      )}
+
+      <div className="relative z-10 flex items-start justify-between gap-2">
         <span className="tile-label">
           {icon && <span aria-hidden="true">{icon}</span>}
           {label}
         </span>
-        {toggle ?? badge}
+        {(toggle ?? badge) && <span className="relative z-10">{toggle ?? badge}</span>}
       </div>
 
       <div className="flex flex-wrap items-baseline gap-1.5">

@@ -115,11 +115,14 @@ export async function createTransaction(formData: FormData) {
   const date = dateRaw ? new Date(dateRaw) : new Date();
   if (Number.isNaN(date.getTime())) return;
 
+  const currency = String(formData.get("currency") ?? "USD").trim().toUpperCase() || "USD";
+
   await prisma.transaction.create({
     data: {
       // Amounts are stored positive; `kind` carries the direction, so a
       // typed minus sign doesn't double-negate an expense.
       amount: Math.abs(amount),
+      currency,
       kind: String(formData.get("kind") ?? "") === "income" ? "income" : "expense",
       date,
       category: String(formData.get("category") ?? "").trim() || null,

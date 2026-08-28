@@ -15,10 +15,14 @@ import {
 } from "@/lib/periods";
 import { parseEnum } from "@/lib/enums";
 import {
+  getBalancesByCurrency,
+  getCurrenciesInUse,
   getCurrentNetWorth,
   getHourlyRate,
   getIncome,
+  getIncomeByCurrency,
   getNetSavings,
+  getNetSavingsByCurrency,
   getSideProjectRevenue,
   getStocksValue,
 } from "@/lib/data-finance";
@@ -38,6 +42,7 @@ import {
   formatCompactCurrency,
   formatDate,
   formatLongDate,
+  formatMultiCurrencyCompact,
   formatNumber,
   formatRelative,
   formatShortDate,
@@ -64,9 +69,13 @@ export default async function HomePage({
   const appsWindow = parseEnum(DAY_WINDOWS, params.apps) as DayWindow;
 
   const [
+    currencies,
     netWorth,
+    netWorthByCurrency,
     income,
+    incomeByCurrency,
     savings,
+    savingsByCurrency,
     sideProjects,
     hourlyRate,
     stocks,
@@ -80,9 +89,13 @@ export default async function HomePage({
     birthdays,
     content,
   ] = await Promise.all([
+    getCurrenciesInUse(),
     getCurrentNetWorth(),
+    getBalancesByCurrency(),
     getIncome(incomePeriod),
+    getIncomeByCurrency(incomePeriod),
     getNetSavings(savingsPeriod),
+    getNetSavingsByCurrency(savingsPeriod),
     getSideProjectRevenue("ytd"),
     getHourlyRate("mtd"),
     getStocksValue(),
@@ -96,6 +109,27 @@ export default async function HomePage({
     getUpcomingBirthdays(),
     getContentThisWeek(),
   ]);
+
+  // getCurrentNetWorth/getIncome/getNetSavings sum every account and
+  // transaction regardless of currency — correct for one currency, but this
+  // data mirrors finance.arnayem.top, which is RMB and BDT with no reliable
+  // rate between them. Summing them into one $-prefixed figure would be a
+  // confident, meaningless number. When more than one currency is in play,
+  // these three tiles show each currency's figure joined instead of a total.
+  const multiCurrency = currencies.length > 1;
+
+  // getIncomeByCurrency/getNetSavingsByCurrency only return a row for a
+  // currency that had a transaction in the current OR previous window — a
+  // currency that's genuinely part of your finances but saw no activity this
+  // period drops out entirely, which formatMultiCurrencyCompact then reads as
+  // "no data" and renders as a bare "—". That looks like an error rather than
+  // "zero this month," so every known currency is backfilled to a zero row
+  // before formatting.
+  function withZeroRows(rows: { currency: string; current: number }[]) {
+    return currencies.map(
+      (currency) => rows.find((row) => row.currency === currency) ?? { currency, current: 0 },
+    );
+  }
 
   // Toggles write their own search param and carry the others through, so
   // changing one tile's window doesn't reset the rest.
@@ -111,17 +145,32 @@ export default async function HomePage({
         <MetricTile
           label="Net Worth"
           icon="$"
-          value={formatCompactCurrency(netWorth)}
-          target={formatCompactCurrency(NET_WORTH_TARGET)}
-          progressPercent={(netWorth / NET_WORTH_TARGET) * 100}
+          href="/finance"
+          value={
+            multiCurrency
+              ? formatMultiCurrencyCompact(
+                  withZeroRows(
+                    netWorthByCurrency.map((row) => ({ currency: row.currency, current: row.total })),
+                  ),
+                )
+              : formatCompactCurrency(netWorth)
+          }
+          target={multiCurrency ? undefined : formatCompactCurrency(NET_WORTH_TARGET)}
+          progressPercent={multiCurrency ? undefined : (netWorth / NET_WORTH_TARGET) * 100}
+          footnote={multiCurrency ? "No combined total — see Finance" : undefined}
         />
 
         <MetricTile
           label="Gross Income"
           icon="↗"
-          value={formatCompactCurrency(income.current)}
-          delta={income.delta}
-          deltaGood={income.delta === null ? null : income.delta >= 0}
+          href="/finance"
+          value={
+            multiCurrency
+              ? formatMultiCurrencyCompact(withZeroRows(incomeByCurrency))
+              : formatCompactCurrency(income.current)
+          }
+          delta={multiCurrency ? undefined : income.delta}
+          deltaGood={multiCurrency ? undefined : income.delta === null ? null : income.delta >= 0}
           toggle={
             <SegmentedControl
               options={MONEY_PERIOD_OPTIONS}
@@ -137,9 +186,14 @@ export default async function HomePage({
         <MetricTile
           label="Net Savings"
           icon="◎"
-          value={formatCompactCurrency(savings.current)}
-          delta={savings.delta}
-          deltaGood={savings.delta === null ? null : savings.delta >= 0}
+          href="/finance"
+          value={
+            multiCurrency
+              ? formatMultiCurrencyCompact(withZeroRows(savingsByCurrency))
+              : formatCompactCurrency(savings.current)
+          }
+          delta={multiCurrency ? undefined : savings.delta}
+          deltaGood={multiCurrency ? undefined : savings.delta === null ? null : savings.delta >= 0}
           toggle={
             <SegmentedControl
               options={MONEY_PERIOD_OPTIONS}
@@ -155,6 +209,7 @@ export default async function HomePage({
         <MetricTile
           label="Side Projects"
           icon="🧰"
+          href="/finance"
           value={formatCompactCurrency(sideProjects.current)}
           footnote="Apps + Etsy · YTD"
         />
@@ -162,15 +217,21 @@ export default async function HomePage({
         <MetricTile
           label="Hourly Rate"
           icon="⏱"
+          href="/finance"
           value={formatCompactCurrency(hourlyRate.current, "USD")}
           delta={hourlyRate.delta}
           deltaGood={hourlyRate.delta === null ? null : hourlyRate.delta >= 0}
-          footnote="Estimated from client income ÷ assumed billable hours"
+          footnote={
+            multiCurrency
+              ? "Estimate mixes currencies while multiple are in use — treat as rough"
+              : "Estimated from client income ÷ assumed billable hours"
+          }
         />
 
         <MetricTile
           label="Stocks"
           icon="📈"
+          href="/finance"
           value={formatCompactCurrency(stocks.value)}
           delta={stocks.delta}
           deltaGood={stocks.delta === null ? null : stocks.delta >= 0}
@@ -181,6 +242,7 @@ export default async function HomePage({
         <MetricTile
           label="App Downloads"
           icon="⬇"
+          href="/projects"
           value={formatNumber(appTotals.installs)}
           delta={appTotals.installsDelta}
           deltaGood={appTotals.installsDelta === null ? null : appTotals.installsDelta >= 0}
@@ -201,6 +263,7 @@ export default async function HomePage({
         <MetricTile
           label="App Revenue"
           icon="💵"
+          href="/projects"
           value={formatCompactCurrency(appTotals.revenue)}
           delta={appTotals.revenueDelta}
           deltaGood={appTotals.revenueDelta === null ? null : appTotals.revenueDelta >= 0}
@@ -210,6 +273,7 @@ export default async function HomePage({
         <MetricTile
           label="12 Apps in 12 Months"
           icon="🚀"
+          href="/projects"
           value={`${appsLaunched}`}
           target={`${APPS_TARGET}`}
           progressPercent={(appsLaunched / APPS_TARGET) * 100}
