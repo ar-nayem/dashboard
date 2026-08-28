@@ -1,6 +1,10 @@
-import Database from "better-sqlite3";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
 import { prisma } from "@/lib/prisma";
 import { requireEnv, type AdapterResult } from "../types";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Mirrors finance.arnayem.top into the dashboard's Finance tab.
@@ -10,6 +14,13 @@ import { requireEnv, type AdapterResult } from "../types";
  * **readonly** — this adapter can never write to, lock, or corrupt the live
  * finance app, which is the whole reason for preferring a poll over adding a
  * webhook to that app's write path.
+ *
+ * The read happens in a CHILD PROCESS (scripts/read-finance-source.mjs).
+ * Opening a second better-sqlite3 handle inside the Next.js server — which
+ * already holds one via the Prisma adapter — segfaults the entire process on
+ * the production box. That took the dashboard down once. Isolating the native
+ * read means a repeat kills only the child, and this returns a failed sync
+ * instead of a dead site.
  *
  * finance.arnayem.top is multi-tenant. Only the configured user's rows are
  * mirrored; the other accounts on that install belong to other people and
@@ -97,86 +108,40 @@ export async function runFinanceTracker(): Promise<AdapterResult> {
   const dbPath = requireEnv("FINANCE_TRACKER_DB");
   const userEmail = requireEnv("FINANCE_TRACKER_USER_EMAIL");
 
-  let db: Database.Database;
+  type SourcePayload = {
+    accounts: SourceAccount[];
+    transactions: SourceTransaction[];
+    investments: SourceInvestment[];
+    transfers: SourceTransfer[];
+    returns: SourceInvestmentEntry[];
+    topUps: SourceInvestmentEntry[];
+  };
+
+  let payload: SourcePayload;
   try {
-    // readonly + fileMustExist: a typo'd path fails loudly here rather than
-    // silently creating an empty database and reporting "0 rows synced".
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const script = path.join(process.cwd(), "scripts", "read-finance-source.mjs");
+    const { stdout } = await execFileAsync(process.execPath, [script, dbPath, userEmail], {
+      timeout: 60_000,
+      // The whole source dataset arrives as one JSON blob; the default 1MB
+      // buffer would truncate it into a parse error as the data grows.
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    payload = JSON.parse(stdout) as SourcePayload;
   } catch (error) {
-    return {
-      ok: false,
-      error: `Cannot open ${dbPath}: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    // execFile surfaces the child's stderr, which carries the precise reason
+    // (bad path, unknown user, or a segfault signal).
+    const detail =
+      error && typeof error === "object" && "stderr" in error && String(error.stderr).trim()
+        ? String(error.stderr).trim()
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return { ok: false, error: `Reading ${dbPath} failed: ${detail}` };
   }
 
-  try {
-    const user = db
-      .prepare("SELECT id FROM User WHERE email = ?")
-      .get(userEmail) as { id: string } | undefined;
+  const { accounts, transactions, investments, transfers, returns, topUps } = payload;
 
-    if (!user) {
-      return { ok: false, error: `No user with email ${userEmail} in the finance-tracker database.` };
-    }
-    const userId = user.id;
-
-    // --- Read everything belonging to this user --------------------------
-    const accounts = db
-      .prepare("SELECT id, name, currency, type, role, createdAt FROM Account WHERE userId = ?")
-      .all(userId) as SourceAccount[];
-
-    const transactions = db
-      .prepare(
-        `SELECT t.id, t.date, t.amount, t.currency, t.type, t.category, t.note, t.accountId,
-                s.name AS streamName, d.fileName AS fileName
-         FROM "Transaction" t
-         LEFT JOIN Stream   s ON s.id = t.streamId
-         LEFT JOIN Document d ON d.id = t.documentId
-         WHERE t.userId = ?`,
-      )
-      .all(userId) as SourceTransaction[];
-
-    const investments = db
-      .prepare(
-        `SELECT i.id, i.name, i.amount, i.currency, i.date, i.type, i.status, i.notes, i.accountId,
-                d.fileName AS fileName
-         FROM Investment i
-         LEFT JOIN Document d ON d.id = i.documentId
-         WHERE i.userId = ?`,
-      )
-      .all(userId) as SourceInvestment[];
-
-    const transfers = db
-      .prepare(
-        `SELECT id, date, fromAccountId, fromAmount, fromCurrency, toAccountId, toAmount,
-                toCurrency, note
-         FROM "Transfer" WHERE userId = ?`,
-      )
-      .all(userId) as SourceTransfer[];
-
-    // Returns and top-ups have no userId column — they belong to an
-    // Investment, so scope them by the investments already filtered above.
-    const investmentIds = investments.map((row) => row.id);
-    const placeholders = investmentIds.map(() => "?").join(",");
-
-    const returns = investmentIds.length
-      ? (db
-          .prepare(
-            `SELECT id, investmentId, date, amount, currency
-             FROM InvestmentReturn WHERE investmentId IN (${placeholders})`,
-          )
-          .all(...investmentIds) as SourceInvestmentEntry[])
-      : [];
-
-    const topUps = investmentIds.length
-      ? (db
-          .prepare(
-            `SELECT id, investmentId, date, amount, currency
-             FROM InvestmentTopUp WHERE investmentId IN (${placeholders})`,
-          )
-          .all(...investmentIds) as SourceInvestmentEntry[])
-      : [];
-
-    db.close();
+  {
 
     // --- Accounts ---------------------------------------------------------
     // Written first: everything below needs the source→dashboard id mapping.
@@ -393,14 +358,5 @@ export async function runFinanceTracker(): Promise<AdapterResult> {
     if (skippedTransfers > 0) parts.push(`${skippedTransfers} transfers skipped (account outside this user)`);
 
     return { ok: true, recordsWritten: written, detail: parts.join(", ") + "." };
-  } catch (error) {
-    // The handle is closed on the success path; close it here too so a
-    // mid-read failure can't leak a file descriptor across cron runs.
-    try {
-      db.close();
-    } catch {
-      // Already closed — nothing to do.
-    }
-    throw error;
   }
 }
