@@ -6,6 +6,10 @@ import { requireEnv, type AdapterResult } from "../types";
 
 const execFileAsync = promisify(execFile);
 
+// Overridable because the interpreter is not always on PATH under pm2's
+// environment, and "python3" alone would fail there with a bare ENOENT.
+const PYTHON = process.env.PYTHON_BIN ?? "python3";
+
 /**
  * Mirrors finance.arnayem.top into the dashboard's Finance tab.
  *
@@ -15,12 +19,19 @@ const execFileAsync = promisify(execFile);
  * finance app, which is the whole reason for preferring a poll over adding a
  * webhook to that app's write path.
  *
- * The read happens in a CHILD PROCESS (scripts/read-finance-source.mjs).
- * Opening a second better-sqlite3 handle inside the Next.js server — which
- * already holds one via the Prisma adapter — segfaults the entire process on
- * the production box. That took the dashboard down once. Isolating the native
- * read means a repeat kills only the child, and this returns a failed sync
- * instead of a dead site.
+ * The read happens in a CHILD PROCESS running Python (scripts/read-finance-source.py).
+ *
+ * Two reasons, both learned the hard way on the production box:
+ *   1. Opening a second better-sqlite3 handle inside the Next.js server —
+ *      which already holds one via the Prisma adapter — segfaulted the whole
+ *      process and took the dashboard offline.
+ *   2. better-sqlite3 also segfaults there as a standalone `node` script
+ *      (exit 139), so moving it to a child process was necessary but not
+ *      sufficient.
+ *
+ * Python's sqlite3 is stdlib, needs no native build, and is proven working on
+ * that machine. A child process additionally means any future crash in the
+ * reader kills only the child and surfaces as a failed sync, not a dead site.
  *
  * finance.arnayem.top is multi-tenant. Only the configured user's rows are
  * mirrored; the other accounts on that install belong to other people and
@@ -119,8 +130,8 @@ export async function runFinanceTracker(): Promise<AdapterResult> {
 
   let payload: SourcePayload;
   try {
-    const script = path.join(process.cwd(), "scripts", "read-finance-source.mjs");
-    const { stdout } = await execFileAsync(process.execPath, [script, dbPath, userEmail], {
+    const script = path.join(process.cwd(), "scripts", "read-finance-source.py");
+    const { stdout } = await execFileAsync(PYTHON, [script, dbPath, userEmail], {
       timeout: 60_000,
       // The whole source dataset arrives as one JSON blob; the default 1MB
       // buffer would truncate it into a parse error as the data grows.
