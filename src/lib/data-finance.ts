@@ -571,3 +571,71 @@ export async function getRecentTransactionsByCurrency(currency: string, limit = 
     include: { account: { select: { name: true } } },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Cross-currency conversion — the one deliberate exception
+// ---------------------------------------------------------------------------
+//
+// Every function above this point refuses to sum across currencies, on
+// purpose: there is no reliable rate baked into this app, and inventing one
+// would produce a confident, meaningless number. This section is the single,
+// explicit exception — it uses the rate the user sets themselves at
+// finance.arnayem.top (mirrored via ExchangeRate) and ONLY that rate. It never
+// invents or estimates one.
+//
+// Every caller of convertToCombinedTotal must still show the untouched
+// per-currency figures alongside the converted one — this is a headline
+// on top of the real numbers, never a replacement for them.
+
+export type CombinedTotal = {
+  /** The converted grand total, in `rate.toCurrency`. */
+  total: number;
+  targetCurrency: string;
+  rate: number;
+  rateDate: Date;
+} | null;
+
+/** The most recent rate for one currency pair, or null if none has ever been set. */
+export async function getLatestExchangeRate(
+  fromCurrency: string,
+  toCurrency: string,
+): Promise<{ rate: number; date: Date } | null> {
+  const row = await prisma.exchangeRate.findFirst({
+    where: { fromCurrency, toCurrency },
+    orderBy: { date: "desc" },
+  });
+  return row ? { rate: row.rate, date: row.date } : null;
+}
+
+/**
+ * Converts a set of per-currency figures into one combined total, using a
+ * mirrored exchange rate — returns null when no usable rate exists, rather
+ * than silently falling back to treating the missing currency as zero.
+ *
+ * Only handles exactly two currencies, because that is the only shape a rate
+ * can convert: `rows` is expected to already be the real set of currencies in
+ * use, and any currency this app has no rate for makes the whole total
+ * unknown rather than partially wrong.
+ */
+export async function convertToCombinedTotal(
+  rows: { currency: string; current: number }[],
+): Promise<CombinedTotal> {
+  const distinctCurrencies = [...new Set(rows.map((row) => row.currency))];
+  if (distinctCurrencies.length !== 2) return null;
+
+  const [a, b] = distinctCurrencies;
+  const rateAtoB = await getLatestExchangeRate(a, b);
+  const rateBtoA = rateAtoB ? null : await getLatestExchangeRate(b, a);
+
+  const forward = rateAtoB ? { from: a, to: b, ...rateAtoB } : null;
+  const reverse = rateBtoA ? { from: b, to: a, ...rateBtoA } : null;
+  const usable = forward ?? reverse;
+  if (!usable) return null;
+
+  const total = rows.reduce((sum, row) => {
+    if (row.currency === usable.to) return sum + row.current;
+    return sum + row.current * usable.rate;
+  }, 0);
+
+  return { total, targetCurrency: usable.to, rate: usable.rate, rateDate: usable.date };
+}

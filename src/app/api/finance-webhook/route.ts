@@ -18,9 +18,15 @@ export const maxDuration = 120;
  *   { "changes": [ { "op": "upsert"|"delete",
  *                    "entity": "account"|"transaction"|"transfer"|
  *                              "investment"|"investment_return"|
- *                              "investment_topup",
+ *                              "investment_topup"|"exchange_rate",
  *                    "sourceUserId": "...",
  *                    "data": { ... } } ] }
+ *
+ * "exchange_rate" is unlike every other entity here: finance-tracker's own
+ * ExchangeRate model has no userId — it's a shared external market rate, not
+ * personal financial data — so the sender attributes it to the configured
+ * user itself rather than a real owner. That's fine: the rate is not
+ * sensitive, and this is still gated by the same secret as everything else.
  *
  * Batched so one push and a 55-row backfill use the same path. Every write is
  * an upsert keyed on externalId, so a retry after a network failure corrects
@@ -334,6 +340,29 @@ export async function POST(request: Request) {
               update: fields,
             });
           }
+          applied++;
+          break;
+        }
+
+        case "exchange_rate": {
+          const key = externalId("fx", id);
+          if (op === "delete") {
+            deleted += (await prisma.exchangeRate.deleteMany({ where: { externalId: key } })).count;
+            break;
+          }
+          const rate = toNumber(data.rate);
+          const date = toDate(data.date);
+          const fromCurrency = data.fromCurrency ? String(data.fromCurrency) : "";
+          const toCurrency = data.toCurrency ? String(data.toCurrency) : "";
+          if (rate === null || !date || !fromCurrency || !toCurrency) {
+            skipped.push(`exchange_rate:${id} — bad rate, date, or currency`);
+            break;
+          }
+          await prisma.exchangeRate.upsert({
+            where: { externalId: key },
+            create: { externalId: key, source: "finance-tracker", date, fromCurrency, toCurrency, rate },
+            update: { date, fromCurrency, toCurrency, rate },
+          });
           applied++;
           break;
         }

@@ -12,6 +12,7 @@ import { StatusChip } from "@/components/chips";
 import { Private } from "@/components/private";
 import { prisma } from "@/lib/prisma";
 import {
+  convertToCombinedTotal,
   getBalancesByCurrency,
   getCurrenciesInUse,
   getExpenseBreakdownByCurrency,
@@ -157,6 +158,20 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
   // per-currency breakdown replaces them rather than sitting alongside.
   const multiCurrency = currencies.length > 1;
 
+  // The one exception: a rate the user set themselves at finance.arnayem.top,
+  // mirrored via ExchangeRate. When present, a converted headline is shown
+  // ABOVE the untouched per-currency cards — never instead of them, so the
+  // approximation this rate represents is always visible next to the real
+  // numbers it was built from.
+  const [combinedBalance, combinedIncome, combinedExpense, combinedSavings] = multiCurrency
+    ? await Promise.all([
+        convertToCombinedTotal(balancesByCurrency.map((row) => ({ currency: row.currency, current: row.total }))),
+        convertToCombinedTotal(incomeByCurrency),
+        convertToCombinedTotal(expensesByCurrency),
+        convertToCombinedTotal(savingsByCurrency),
+      ])
+    : [null, null, null, null];
+
   const toggle = (
     <SegmentedControl
       options={MONEY_PERIOD_OPTIONS}
@@ -173,12 +188,88 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
       {multiCurrency && (
         <>
           <div className="mt-6 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground/90">
-            <strong className="font-medium">
-              {currencies.join(" and ")} are shown separately.
-            </strong>{" "}
-            There is no reliable rate between them in your data, so nothing is converted or added
-            together — a combined total would look authoritative and mean nothing.
+            <strong className="font-medium">{currencies.join(" and ")} are shown separately.</strong>{" "}
+            {combinedBalance ? (
+              <>
+                The figures below are the real, untouched numbers. The total above them is
+                converted using the rate set at finance.arnayem.top ({combinedBalance.rate}), which
+                drifts and is an approximation — never the source of truth.
+              </>
+            ) : (
+              <>
+                There is no reliable rate between them yet, so nothing is converted or added
+                together — a combined total would look authoritative and mean nothing. Set a rate
+                at finance.arnayem.top to see one here.
+              </>
+            )}
           </div>
+
+          {combinedBalance && (
+            <div className="mt-4 card">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Converted total
+                  </span>
+                  <div className="mt-1 flex items-baseline gap-2">
+                    <span className="tnum text-3xl font-semibold text-foreground">
+                      <Private chars={6}>
+                        {formatCurrency(combinedBalance.total, combinedBalance.targetCurrency)}
+                      </Private>
+                    </span>
+                    <span className="text-xs text-faint-foreground">
+                      @ {combinedBalance.rate} · {formatDate(combinedBalance.rateDate)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {(combinedIncome || combinedExpense || combinedSavings) && (
+                <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-border pt-4">
+                  {combinedIncome && (
+                    <div>
+                      <dt className="text-[11px] text-muted-foreground">
+                        Income · {combinedIncome.targetCurrency}
+                      </dt>
+                      <dd className="tnum text-sm text-success">
+                        <Private chars={5}>
+                          {formatCurrency(combinedIncome.total, combinedIncome.targetCurrency)}
+                        </Private>
+                      </dd>
+                    </div>
+                  )}
+                  {combinedExpense && (
+                    <div>
+                      <dt className="text-[11px] text-muted-foreground">
+                        Expenses · {combinedExpense.targetCurrency}
+                      </dt>
+                      <dd className="tnum text-sm text-danger">
+                        <Private chars={5}>
+                          {formatCurrency(combinedExpense.total, combinedExpense.targetCurrency)}
+                        </Private>
+                      </dd>
+                    </div>
+                  )}
+                  {combinedSavings && (
+                    <div>
+                      <dt className="text-[11px] text-muted-foreground">
+                        Net · {combinedSavings.targetCurrency}
+                      </dt>
+                      <dd
+                        className={`tnum text-sm font-medium ${
+                          combinedSavings.total >= 0 ? "text-foreground" : "text-danger"
+                        }`}
+                      >
+                        <Private chars={5}>
+                          {formatCurrency(combinedSavings.total, combinedSavings.targetCurrency)}
+                        </Private>
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              )}
+            </div>
+          )}
 
           <div className="mt-4 flex justify-end">{toggle}</div>
 

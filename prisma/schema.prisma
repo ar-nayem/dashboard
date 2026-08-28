@@ -402,6 +402,31 @@ model Loan {
   updatedAt      DateTime  @updatedAt
 }
 
+// A manually-set market rate, mirrored from finance.arnayem.top — the user
+// sets it there (their own ExchangeRate model has the identical shape and no
+// userId either, since it's a shared external rate, not personal financial
+// data), and it is the ONLY conversion this app ever performs across
+// currencies. Everywhere else, RMB and BDT are deliberately never summed.
+//
+// Used only to show a converted headline figure ALONGSIDE the untouched
+// per-currency breakdown — never in place of it — so the approximation is
+// always visible next to the real numbers it was built from.
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  date         DateTime
+  fromCurrency String
+  toCurrency   String
+  rate         Float
+
+  source     String  @default("manual")
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@unique([date, fromCurrency, toCurrency])
+  @@index([fromCurrency, toCurrency, date])
+}
+
 // Money moved between two of your own accounts. Not income or expense — a
 // transfer must never inflate either, so it is a separate model rather than a
 // pair of Transaction rows.

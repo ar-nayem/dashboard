@@ -15,6 +15,7 @@ import {
 } from "@/lib/periods";
 import { parseEnum } from "@/lib/enums";
 import {
+  convertToCombinedTotal,
   getBalancesByCurrency,
   getCurrenciesInUse,
   getCurrentNetWorth,
@@ -131,6 +132,20 @@ export default async function HomePage({
     );
   }
 
+  // The one place this app converts across currencies: using the rate set at
+  // finance.arnayem.top, mirrored via ExchangeRate. Only ever computed —
+  // never guessed — and always shown next to, not instead of, the real
+  // per-currency figures via `footnote` below.
+  const [netWorthCombined, incomeCombined, savingsCombined] = multiCurrency
+    ? await Promise.all([
+        convertToCombinedTotal(
+          withZeroRows(netWorthByCurrency.map((row) => ({ currency: row.currency, current: row.total }))),
+        ),
+        convertToCombinedTotal(withZeroRows(incomeByCurrency)),
+        convertToCombinedTotal(withZeroRows(savingsByCurrency)),
+      ])
+    : [null, null, null];
+
   // Toggles write their own search param and carry the others through, so
   // changing one tile's window doesn't reset the rest.
   const carry = { income: incomePeriod, savings: savingsPeriod, apps: appsWindow };
@@ -148,16 +163,28 @@ export default async function HomePage({
           href="/finance"
           value={
             multiCurrency
-              ? formatMultiCurrencyCompact(
-                  withZeroRows(
-                    netWorthByCurrency.map((row) => ({ currency: row.currency, current: row.total })),
-                  ),
-                )
+              ? netWorthCombined
+                ? formatCompactCurrency(netWorthCombined.total, netWorthCombined.targetCurrency)
+                : formatMultiCurrencyCompact(
+                    withZeroRows(
+                      netWorthByCurrency.map((row) => ({ currency: row.currency, current: row.total })),
+                    ),
+                  )
               : formatCompactCurrency(netWorth)
           }
           target={multiCurrency ? undefined : formatCompactCurrency(NET_WORTH_TARGET)}
           progressPercent={multiCurrency ? undefined : (netWorth / NET_WORTH_TARGET) * 100}
-          footnote={multiCurrency ? "No combined total — see Finance" : undefined}
+          footnote={
+            multiCurrency
+              ? netWorthCombined
+                ? `${formatMultiCurrencyCompact(
+                    withZeroRows(
+                      netWorthByCurrency.map((row) => ({ currency: row.currency, current: row.total })),
+                    ),
+                  )} · @ ${netWorthCombined.rate} (${currencies.filter((c) => c !== netWorthCombined.targetCurrency)[0]}→${netWorthCombined.targetCurrency})`
+                : "No combined total — set a rate at finance.arnayem.top"
+              : undefined
+          }
         />
 
         <MetricTile
@@ -166,11 +193,18 @@ export default async function HomePage({
           href="/finance"
           value={
             multiCurrency
-              ? formatMultiCurrencyCompact(withZeroRows(incomeByCurrency))
+              ? incomeCombined
+                ? formatCompactCurrency(incomeCombined.total, incomeCombined.targetCurrency)
+                : formatMultiCurrencyCompact(withZeroRows(incomeByCurrency))
               : formatCompactCurrency(income.current)
           }
           delta={multiCurrency ? undefined : income.delta}
           deltaGood={multiCurrency ? undefined : income.delta === null ? null : income.delta >= 0}
+          footnote={
+            multiCurrency && incomeCombined
+              ? formatMultiCurrencyCompact(withZeroRows(incomeByCurrency))
+              : undefined
+          }
           toggle={
             <SegmentedControl
               options={MONEY_PERIOD_OPTIONS}
@@ -189,11 +223,18 @@ export default async function HomePage({
           href="/finance"
           value={
             multiCurrency
-              ? formatMultiCurrencyCompact(withZeroRows(savingsByCurrency))
+              ? savingsCombined
+                ? formatCompactCurrency(savingsCombined.total, savingsCombined.targetCurrency)
+                : formatMultiCurrencyCompact(withZeroRows(savingsByCurrency))
               : formatCompactCurrency(savings.current)
           }
           delta={multiCurrency ? undefined : savings.delta}
           deltaGood={multiCurrency ? undefined : savings.delta === null ? null : savings.delta >= 0}
+          footnote={
+            multiCurrency && savingsCombined
+              ? formatMultiCurrencyCompact(withZeroRows(savingsByCurrency))
+              : undefined
+          }
           toggle={
             <SegmentedControl
               options={MONEY_PERIOD_OPTIONS}

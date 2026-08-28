@@ -109,19 +109,22 @@ export function PieChart({
         role="img"
         aria-label={ariaLabel}
       >
-        {arcs.map((arc) => (
-          <path
-            key={arc.label}
-            d={arc.path}
-            fill={arc.color}
-            stroke="var(--surface)"
-            strokeWidth={1.5}
-          >
-            <title>
-              {arc.label}: {formatValue(arc.value)} ({(arc.fraction * 100).toFixed(1)}%)
-            </title>
-          </path>
-        ))}
+        {arcs.map((arc) => {
+          // A single pre-joined string, not several interpolated JSX
+          // expressions with literal text between them: that pattern (label,
+          // then ": ", then a number, then " (", …) produces sibling text
+          // nodes that React 19 sometimes splits differently between the
+          // server render and the client's first pass, which throws a
+          // "Recoverable Error" hydration mismatch on every load despite
+          // rendering identical, correct text either way.
+          const title = `${arc.label}: ${formatValue(arc.value)} (${(arc.fraction * 100).toFixed(1)}%)`;
+          return (
+            <g key={arc.label}>
+              <title>{title}</title>
+              <path d={arc.path} fill={arc.color} stroke="var(--surface)" strokeWidth={1.5} />
+            </g>
+          );
+        })}
         <text
           x={CENTER}
           y={CENTER}
