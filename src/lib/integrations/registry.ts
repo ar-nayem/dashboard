@@ -6,7 +6,6 @@ import { runGoogleAnalytics } from "./adapters/google-analytics";
 import { runSearchConsole } from "./adapters/search-console";
 import { runAppStore } from "./adapters/app-store";
 import { runRevenueCat } from "./adapters/revenuecat";
-import { runFinanceTracker } from "./adapters/finance-tracker";
 
 /**
  * Every data source the app knows about.
@@ -130,22 +129,26 @@ export const ADAPTERS: Adapter[] = [
   {
     key: "finance_tracker",
     name: "finance.arnayem.top",
-    // Polled every 5 minutes by cron, so anything older than an hour means
-    // the job stopped rather than that you simply haven't entered anything.
-    staleAfterHours: 1,
-    note: "Accounts, transactions, investments and transfers → Finance. One-way mirror; enter data at the source.",
+    // Pushed, not polled: finance-tracker's Prisma client carries a hook that
+    // POSTs each write to /api/finance-webhook, so rows land here the moment
+    // they are saved there. An hourly backfill on that side reconciles
+    // anything a failed push missed.
+    //
+    // There is deliberately no pull adapter. One was written and it collided:
+    // it keyed accounts as "ft:account:…" and transfers as "ft:xfer:…" where
+    // the webhook uses "ft:acc:…" and "ft:trf:…", so the two duplicated every
+    // account and transfer, and the pull's stale-row sweep deleted the
+    // webhook's rows on each run while the webhook recreated them.
+    staleAfterHours: 24,
+    note: "Accounts, transactions, investments and transfers → Finance. Pushed live from that app on every save.",
     implemented: true,
-    credentials: [
-      {
-        env: "FINANCE_TRACKER_DB",
-        hint: "Absolute path to that app's SQLite file on this server — /root/finance-tracker/dev.db. Opened read-only.",
-      },
-      {
-        env: "FINANCE_TRACKER_USER_EMAIL",
-        hint: "Which account to mirror. That install is multi-tenant, so only this user's rows are copied.",
-      },
-    ],
-    run: runFinanceTracker,
+    pushOnly: true,
+    credentials: [],
+    run: async () => ({
+      ok: false,
+      error:
+        "finance.arnayem.top pushes to /api/finance-webhook on every save — there is nothing to pull.",
+    }),
   },
   {
     key: "apple_health",
