@@ -36,25 +36,43 @@ export function daysUntil(date: Date | string): number {
   return differenceInCalendarDays(new Date(date), startOfDay(new Date()));
 }
 
+// Intl throws a RangeError on anything that is not a 3-letter code, and these
+// formatters run inside server components — one malformed currency on one row
+// would otherwise crash the whole page render rather than mis-render a cell.
+// Mirrored data comes from an app whose currency field is free text, so this
+// is a real input, not a hypothetical one.
+function safeCurrencyFormat(
+  value: number,
+  currency: string,
+  options: Intl.NumberFormatOptions,
+): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency, ...options }).format(
+      value,
+    );
+  } catch {
+    // Fall back to a plain number with the raw code appended, so the figure
+    // still reads correctly and the bad code is visible rather than hidden.
+    const formatted = new Intl.NumberFormat("en-US", options).format(value);
+    return currency ? `${formatted} ${currency}` : formatted;
+  }
+}
+
 // "$1,234" by default; pass decimals for cents.
 export function formatCurrency(value: number, currency = "USD", decimals = 0): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
+  return safeCurrencyFormat(value, currency, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }).format(value);
+  });
 }
 
 // "$1.2k" / "$140.0k" / "$1.4M" — the metric tiles are too narrow for full
 // numbers.
 export function formatCompactCurrency(value: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
+  return safeCurrencyFormat(value, currency, {
     notation: "compact",
     maximumFractionDigits: 1,
-  }).format(value);
+  });
 }
 
 export function formatNumber(value: number): string {

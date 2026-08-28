@@ -63,7 +63,7 @@ model Task {
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   clientId String?
-  client   Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
   @@index([areaId])
   @@index([projectId])
@@ -94,17 +94,17 @@ model Client {
 // frequency: "daily" | "weekly" | "custom"
 // weekdays: comma-separated 0-6 (Sun-Sat), only read when frequency="custom"
 model Habit {
-  id            String   @id @default(cuid())
-  name          String
-  emoji         String?
-  kind          String   @default("do")
-  frequency     String   @default("daily")
-  weekdays      String?
-  timesPerWeek  Int?
-  sortOrder     Int      @default(0)
-  archived      Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String
+  emoji        String?
+  kind         String   @default("do")
+  frequency    String   @default("daily")
+  weekdays     String?
+  timesPerWeek Int?
+  sortOrder    Int      @default(0)
+  archived     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   areaId String?
   area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
@@ -213,14 +213,14 @@ model WorkoutTemplate {
 }
 
 model TemplateExercise {
-  id         String @id @default(cuid())
+  id         String          @id @default(cuid())
   templateId String
   template   WorkoutTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   exerciseId String
   exercise   Exercise        @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
-  sortOrder  Int    @default(0)
-  targetSets Int    @default(3)
-  repRange   String @default("8-12")
+  sortOrder  Int             @default(0)
+  targetSets Int             @default(3)
+  repRange   String          @default("8-12")
 
   @@unique([templateId, exerciseId])
   @@index([templateId, sortOrder])
@@ -307,9 +307,19 @@ model Account {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// "manual" | "finance-tracker" — where this row came from. Mirrored rows
+  /// are overwritten on the next push, so the UI marks them read-only.
+  source     String  @default("manual")
+  /// Stable ID at the source, e.g. "ft:cmsip7…". Unique so a repeated push
+  /// updates rather than duplicating.
+  externalId String? @unique
+
   snapshots    AccountSnapshot[]
   transactions Transaction[]
   holdings     Holding[]
+  transfersOut Transfer[]        @relation("TransferFrom")
+  transfersIn  Transfer[]        @relation("TransferTo")
+  investments  Investment[]
 }
 
 // Point-in-time balance. The net-worth trajectory chart is built from these
@@ -332,19 +342,28 @@ model Transaction {
   id          String   @id @default(cuid())
   date        DateTime
   amount      Float
+  /// Amounts are NEVER summed across currencies — this app has no reliable
+  /// USD rate for RMB or BDT, and a mixed total would be a meaningless
+  /// number presented as fact. Every finance read groups by this field.
+  currency    String   @default("USD")
   kind        String   @default("expense")
   category    String?
   description String?
 
+  /// Receipt attached at the source. The file itself stays on the origin
+  /// server; this is metadata plus a link back to it.
+  receiptName String?
+  receiptUrl  String?
+
   /// "manual" | "stripe" | ... — which adapter (if any) created this row.
-  source      String   @default("manual")
+  source     String  @default("manual")
   /// Stable ID at the source, e.g. "stripe:ch_123". Unique so a cron re-run
   /// updates the existing row instead of duplicating income every sync.
   /// Null for anything entered by hand.
-  externalId  String?  @unique
+  externalId String? @unique
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   accountId String?
   account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -383,6 +402,105 @@ model Loan {
   updatedAt      DateTime  @updatedAt
 }
 
+// Money moved between two of your own accounts. Not income or expense — a
+// transfer must never inflate either, so it is a separate model rather than a
+// pair of Transaction rows.
+//
+// Amounts are denormalised per side because the two accounts can hold
+// different currencies and the applied rate is a property of the transfer,
+// not something to recompute later from a rate table that may have moved.
+model Transfer {
+  id            String   @id @default(cuid())
+  date          DateTime
+  fromAccountId String
+  fromAccount   Account  @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Cascade)
+  fromAmount    Float
+  fromCurrency  String
+  toAccountId   String
+  toAccount     Account  @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Cascade)
+  toAmount      Float
+  toCurrency    String
+  note          String?
+
+  source     String  @default("manual")
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+}
+
+// A capital position that is not a listed security — private deals, lending,
+// business stakes. Kept separate from Holding, which is share/symbol/price
+// based and would need fabricated tickers and share counts to represent any
+// of this honestly.
+//
+// status: "active" | "exited" | "lost"
+model Investment {
+  id       String   @id @default(cuid())
+  name     String
+  amount   Float
+  currency String
+  date     DateTime
+  kind     String?
+  status   String   @default("active")
+  notes    String?
+
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  receiptName String?
+  receiptUrl  String?
+
+  source     String  @default("manual")
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  returns InvestmentReturn[]
+  topUps  InvestmentTopUp[]
+
+  @@index([status])
+}
+
+// Money paid back out of an Investment.
+model InvestmentReturn {
+  id           String     @id @default(cuid())
+  investmentId String
+  investment   Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  date         DateTime
+  amount       Float
+  currency     String
+  note         String?
+
+  source     String  @default("manual")
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([investmentId])
+}
+
+// Additional capital put into an existing Investment.
+model InvestmentTopUp {
+  id           String     @id @default(cuid())
+  investmentId String
+  investment   Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  date         DateTime
+  amount       Float
+  currency     String
+  note         String?
+
+  source     String  @default("manual")
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([investmentId])
+}
+
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
@@ -408,15 +526,15 @@ model Project {
   // it rather than guessing from the name.
   //
   // "owner/repo", e.g. "acme/dashboard"
-  githubRepo      String?
+  githubRepo    String?
   // GA4 numeric property ID, e.g. "123456789"
-  gaPropertyId    String?
+  gaPropertyId  String?
   // Search Console property, exactly as verified (often "sc-domain:example.com")
-  gscSiteUrl      String?
+  gscSiteUrl    String?
   // App Store numeric app ID (the digits in the App Store URL)
-  appStoreAppId   String?
+  appStoreAppId String?
   // RevenueCat project ID, for subscription revenue
-  revenueCatId    String?
+  revenueCatId  String?
 
   areaId String?
   area   Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
@@ -445,14 +563,14 @@ model ProjectMetric {
   activeUsers    Int?
 
   // Written by the GitHub adapter.
-  commits        Int?
+  commits Int?
 
   // Written by the Search Console adapter.
-  impressions    Int?
-  clicks         Int?
-  avgPosition    Float?
+  impressions Int?
+  clicks      Int?
+  avgPosition Float?
 
-  createdAt      DateTime @default(now())
+  createdAt DateTime @default(now())
 
   // Every column above is nullable and each adapter upserts only its own,
   // so GA writing visitors never clobbers App Store's installs for the same
@@ -530,12 +648,12 @@ model Video {
 }
 
 model VideoSubtask {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   videoId   String
-  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  video     Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
   text      String
-  done      Boolean  @default(false)
-  sortOrder Int      @default(0)
+  done      Boolean @default(false)
+  sortOrder Int     @default(0)
 
   @@index([videoId])
 }
@@ -544,21 +662,21 @@ model VideoSubtask {
 // chart and the 7d/28d/90d/All windows.
 // platform: "youtube" | "instagram" | "x" | "tiktok" | "threads"
 model SocialStat {
-  id         String   @id @default(cuid())
-  platform   String
-  date       DateTime
-  followers  Int?
+  id            String   @id @default(cuid())
+  platform      String
+  date          DateTime
+  followers     Int?
   /// Views on this day alone. Null when it could not be derived (see below).
-  views      Int?
+  views         Int?
   /// Cumulative lifetime views as reported by the platform.
   ///
   /// Stored because the YouTube Data API only exposes running totals, so the
   /// daily `views` figure is this minus yesterday's. Keeping the raw total
   /// means a missed sync day can be reconciled later instead of being lost.
   lifetimeViews Int?
-  watchHours Float?
-  posts      Int?
-  createdAt  DateTime @default(now())
+  watchHours    Float?
+  posts         Int?
+  createdAt     DateTime @default(now())
 
   @@unique([platform, date])
   @@index([platform, date])
@@ -704,17 +822,17 @@ model Integration {
 //
 // trigger: "manual" | "cron"
 model SyncRun {
-  id            String    @id @default(cuid())
-  integrationId String
-  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
-  startedAt     DateTime  @default(now())
-  finishedAt    DateTime?
-  ok            Boolean   @default(false)
-  trigger       String    @default("manual")
+  id             String      @id @default(cuid())
+  integrationId  String
+  integration    Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  startedAt      DateTime    @default(now())
+  finishedAt     DateTime?
+  ok             Boolean     @default(false)
+  trigger        String      @default("manual")
   /// How many rows the adapter actually wrote.
-  recordsWritten Int      @default(0)
-  detail        String?
-  error         String?
+  recordsWritten Int         @default(0)
+  detail         String?
+  error          String?
 
   @@index([integrationId, startedAt])
 }

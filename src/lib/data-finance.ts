@@ -228,3 +228,167 @@ export async function getMonthlyCashflow(months = 12) {
 
   return [...byMonth.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-months);
 }
+
+// ---------------------------------------------------------------------------
+// Currency-aware reads
+// ---------------------------------------------------------------------------
+//
+// The functions above sum every transaction regardless of currency, which is
+// only correct while a single currency is in play. Data mirrored from
+// finance.arnayem.top is RMB and BDT, and there is no trustworthy USD rate
+// for either — so these return one row PER CURRENCY and the UI renders them
+// side by side. Adding 30,420 RMB to 59,320 BDT would produce a number that
+// looks authoritative and means nothing.
+
+export type CurrencyTotal = {
+  currency: string;
+  current: number;
+  previous: number;
+  /** null when the comparison period was zero. */
+  delta: number | null;
+};
+
+async function sumByCurrency(
+  kind: "income" | "expense",
+  range: Range,
+): Promise<Map<string, number>> {
+  const rows = await prisma.transaction.groupBy({
+    by: ["currency"],
+    _sum: { amount: true },
+    where: { kind, date: { gte: range.start, lte: range.end } },
+  });
+  return new Map(rows.map((row) => [row.currency, row._sum.amount ?? 0]));
+}
+
+function mergeCurrencyTotals(
+  now: Map<string, number>,
+  before: Map<string, number>,
+): CurrencyTotal[] {
+  // Union of both windows: a currency used last month but not this one still
+  // deserves a row showing it fell to zero, rather than vanishing silently.
+  const currencies = [...new Set([...now.keys(), ...before.keys()])].sort();
+
+  return currencies.map((currency) => {
+    const current = now.get(currency) ?? 0;
+    const previous = before.get(currency) ?? 0;
+    return { currency, current, previous, delta: percentChange(current, previous) };
+  });
+}
+
+export async function getIncomeByCurrency(period: MoneyPeriod): Promise<CurrencyTotal[]> {
+  const { current, previous } = moneyRange(period);
+  const [now, before] = await Promise.all([
+    sumByCurrency("income", current),
+    sumByCurrency("income", previous),
+  ]);
+  return mergeCurrencyTotals(now, before);
+}
+
+export async function getExpensesByCurrency(period: MoneyPeriod): Promise<CurrencyTotal[]> {
+  const { current, previous } = moneyRange(period);
+  const [now, before] = await Promise.all([
+    sumByCurrency("expense", current),
+    sumByCurrency("expense", previous),
+  ]);
+  return mergeCurrencyTotals(now, before);
+}
+
+/** Income minus expenses, per currency. */
+export async function getNetSavingsByCurrency(period: MoneyPeriod): Promise<CurrencyTotal[]> {
+  const [income, expenses] = await Promise.all([
+    getIncomeByCurrency(period),
+    getExpensesByCurrency(period),
+  ]);
+
+  const byCurrency = new Map<string, CurrencyTotal>();
+  for (const row of income) {
+    byCurrency.set(row.currency, { ...row });
+  }
+  for (const row of expenses) {
+    const existing = byCurrency.get(row.currency) ?? {
+      currency: row.currency,
+      current: 0,
+      previous: 0,
+      delta: null,
+    };
+    existing.current -= row.current;
+    existing.previous -= row.previous;
+    byCurrency.set(row.currency, existing);
+  }
+
+  return [...byCurrency.values()]
+    .map((row) => ({ ...row, delta: percentChange(row.current, row.previous) }))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
+export type CurrencyBalance = { currency: string; total: number; accounts: number };
+
+/**
+ * Latest balance per account, grouped by the account's own currency.
+ *
+ * There is deliberately no single net-worth figure here — see the note at the
+ * top of this section.
+ */
+export async function getBalancesByCurrency(): Promise<CurrencyBalance[]> {
+  const accounts = await prisma.account.findMany({
+    where: { active: true },
+    select: {
+      currency: true,
+      snapshots: { orderBy: { date: "desc" }, take: 1, select: { balance: true } },
+    },
+  });
+
+  const byCurrency = new Map<string, CurrencyBalance>();
+  for (const account of accounts) {
+    const balance = account.snapshots[0]?.balance;
+    // An account with no snapshot has no known balance. Counting it as zero
+    // would understate net worth and look like a real reading.
+    if (balance === undefined) continue;
+
+    const entry = byCurrency.get(account.currency) ?? {
+      currency: account.currency,
+      total: 0,
+      accounts: 0,
+    };
+    entry.total += balance;
+    entry.accounts++;
+    byCurrency.set(account.currency, entry);
+  }
+
+  return [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
+/** Every currency that appears anywhere in the finance data. */
+export async function getCurrenciesInUse(): Promise<string[]> {
+  const [transactions, accounts] = await Promise.all([
+    prisma.transaction.groupBy({ by: ["currency"] }),
+    prisma.account.groupBy({ by: ["currency"] }),
+  ]);
+  return [
+    ...new Set([...transactions.map((t) => t.currency), ...accounts.map((a) => a.currency)]),
+  ].sort();
+}
+
+/** Mirrored investments, newest first. */
+export async function getInvestments() {
+  return prisma.investment.findMany({
+    orderBy: { date: "desc" },
+    include: {
+      account: { select: { name: true } },
+      returns: { orderBy: { date: "desc" } },
+      topUps: { orderBy: { date: "desc" } },
+    },
+  });
+}
+
+/** Mirrored transfers, newest first. */
+export async function getTransfers(limit = 25) {
+  return prisma.transfer.findMany({
+    orderBy: { date: "desc" },
+    take: limit,
+    include: {
+      fromAccount: { select: { name: true, currency: true } },
+      toAccount: { select: { name: true, currency: true } },
+    },
+  });
+}

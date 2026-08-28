@@ -13,4 +13,5 @@ export const INTEGRATION_SEED = [
   { key: "youtube", name: "YouTube", status: "never", sortOrder: 6 },
   { key: "ibkr", name: "IBKR Portfolio", status: "never", sortOrder: 7 },
   { key: "apple_health", name: "Apple Health", status: "never", sortOrder: 8 },
+  { key: "finance_tracker", name: "finance.arnayem.top", status: "never", sortOrder: 9 },
 ];

@@ -6,8 +6,18 @@ import { LineChart } from "@/components/charts/line-chart";
 import { BarChart } from "@/components/charts/bar-chart";
 import { ProgressBar } from "@/components/charts/progress-bar";
 import { EmptyState } from "@/components/empty-state";
+import { StatusChip } from "@/components/chips";
 import { Private } from "@/components/private";
 import { prisma } from "@/lib/prisma";
+import {
+  getBalancesByCurrency,
+  getCurrenciesInUse,
+  getExpensesByCurrency,
+  getIncomeByCurrency,
+  getInvestments,
+  getNetSavingsByCurrency,
+  getTransfers,
+} from "@/lib/data-finance";
 import { MONEY_PERIODS, MONEY_PERIOD_OPTIONS, type MoneyPeriod } from "@/lib/periods";
 import { ACCOUNT_KINDS, parseEnum } from "@/lib/enums";
 import {
@@ -50,6 +60,7 @@ const TABS = [
   { key: "overview", label: "Overview" },
   { key: "income", label: "Income" },
   { key: "investments", label: "Investments" },
+  { key: "transfers", label: "Transfers" },
   { key: "accounts", label: "Accounts" },
   { key: "loans", label: "Loans" },
 ];
@@ -91,6 +102,7 @@ export default async function FinancePage({
       {tab === "overview" && <OverviewTab period={period} />}
       {tab === "income" && <IncomeTab period={period} />}
       {tab === "investments" && <InvestmentsTab />}
+      {tab === "transfers" && <TransfersTab />}
       {tab === "accounts" && <AccountsTab />}
       {tab === "loans" && <LoansTab />}
     </div>
@@ -100,7 +112,20 @@ export default async function FinancePage({
 // ---------------------------------------------------------------------------
 
 async function OverviewTab({ period }: { period: MoneyPeriod }) {
-  const [netWorth, series, income, savings, savingsRate, stocks, sideProjects] = await Promise.all([
+  const [
+    netWorth,
+    series,
+    income,
+    savings,
+    savingsRate,
+    stocks,
+    sideProjects,
+    currencies,
+    incomeByCurrency,
+    expensesByCurrency,
+    savingsByCurrency,
+    balancesByCurrency,
+  ] = await Promise.all([
     getCurrentNetWorth(),
     getNetWorthSeries(24),
     getIncome(period),
@@ -108,7 +133,17 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
     getSavingsRate(period),
     getStocksValue(),
     getSideProjectRevenue(period),
+    getCurrenciesInUse(),
+    getIncomeByCurrency(period),
+    getExpensesByCurrency(period),
+    getNetSavingsByCurrency(period),
+    getBalancesByCurrency(),
   ]);
+
+  // With more than one currency in play, the single-number tiles below would
+  // be summing RMB and BDT into a figure that means nothing. In that case the
+  // per-currency breakdown replaces them rather than sitting alongside.
+  const multiCurrency = currencies.length > 1;
 
   const toggle = (
     <SegmentedControl
@@ -123,6 +158,102 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
 
   return (
     <>
+      {multiCurrency && (
+        <>
+          <div className="mt-6 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground/90">
+            <strong className="font-medium">
+              {currencies.join(" and ")} are shown separately.
+            </strong>{" "}
+            There is no reliable rate between them in your data, so nothing is converted or added
+            together — a combined total would look authoritative and mean nothing.
+          </div>
+
+          <section className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {balancesByCurrency.map((balance) => (
+              <div key={balance.currency} className="tile">
+                <span className="tile-label">Balance · {balance.currency}</span>
+                <span className="tile-value">
+                  <Private chars={6}>
+                    {formatCurrency(balance.total, balance.currency)}
+                  </Private>
+                </span>
+                <span className="text-xs text-faint-foreground">
+                  across {balance.accounts} account{balance.accounts === 1 ? "" : "s"}
+                </span>
+              </div>
+            ))}
+          </section>
+
+          <section className="mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="section-title">This period, by currency</h2>
+              {toggle}
+            </div>
+
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {currencies.map((currency) => {
+                const income = incomeByCurrency.find((row) => row.currency === currency);
+                const expense = expensesByCurrency.find((row) => row.currency === currency);
+                const saving = savingsByCurrency.find((row) => row.currency === currency);
+
+                // Savings rate is a ratio within one currency, so it stays
+                // meaningful here where a cross-currency version would not.
+                const rate =
+                  income && income.current > 0 && saving
+                    ? (saving.current / income.current) * 100
+                    : null;
+
+                return (
+                  <div key={currency} className="card">
+                    <h3 className="text-sm font-medium text-foreground">{currency}</h3>
+                    <dl className="mt-3 flex flex-col gap-2 text-sm">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <dt className="text-muted-foreground">Income</dt>
+                        <dd className="tnum text-success">
+                          <Private chars={5}>
+                            {formatCurrency(income?.current ?? 0, currency)}
+                          </Private>
+                        </dd>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <dt className="text-muted-foreground">Expenses</dt>
+                        <dd className="tnum text-danger">
+                          <Private chars={5}>
+                            {formatCurrency(expense?.current ?? 0, currency)}
+                          </Private>
+                        </dd>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2 border-t border-border pt-2">
+                        <dt className="text-foreground/80">Net</dt>
+                        <dd
+                          className={`tnum font-medium ${
+                            (saving?.current ?? 0) >= 0 ? "text-foreground" : "text-danger"
+                          }`}
+                        >
+                          <Private chars={5}>
+                            {formatCurrency(saving?.current ?? 0, currency)}
+                          </Private>
+                        </dd>
+                      </div>
+                      {rate !== null && (
+                        <div className="flex items-baseline justify-between gap-2">
+                          <dt className="text-muted-foreground">Savings rate</dt>
+                          <dd className="tnum text-foreground/80">{rate.toFixed(1)}%</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* The trajectory chart and the tiles below sum across every account
+          regardless of currency, so they are only shown when a single
+          currency is in play. */}
+      {!multiCurrency && (
       <section className="mt-6">
         <div className="card">
           <h2 className="section-title">Net Worth Trajectory</h2>
@@ -162,7 +293,9 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
           </div>
         </div>
       </section>
+      )}
 
+      {!multiCurrency && (
       <section className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricTile
           label="Net Worth"
@@ -210,6 +343,7 @@ async function OverviewTab({ period }: { period: MoneyPeriod }) {
           deltaGood={sideProjects.delta === null ? null : sideProjects.delta >= 0}
         />
       </section>
+      )}
     </>
   );
 }
@@ -421,10 +555,11 @@ async function IncomeTab({ period }: { period: MoneyPeriod }) {
 // ---------------------------------------------------------------------------
 
 async function InvestmentsTab() {
-  const [holdings, stocks, accounts] = await Promise.all([
+  const [holdings, stocks, accounts, investments] = await Promise.all([
     getHoldings(),
     getStocksValue(),
     getAccountsWithBalances(),
+    getInvestments(),
   ]);
 
   // Only accounts that can actually hold securities.
@@ -507,6 +642,87 @@ async function InvestmentsTab() {
           </tbody>
         </table>
       </section>
+
+      {investments.length > 0 && (
+        <section className="mt-8">
+          <h2 className="section-title">Positions</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Capital that is not a listed security — private deals, lending, business stakes.
+            Amounts stay in their own currency.
+          </p>
+
+          <div className="mt-3 flex flex-col gap-2">
+            {investments.map((investment) => {
+              // Cost is the original amount plus every top-up; returns are what
+              // has come back. Both are only summed within a single currency.
+              const toppedUp = investment.topUps
+                .filter((t) => t.currency === investment.currency)
+                .reduce((sum, t) => sum + t.amount, 0);
+              const returned = investment.returns
+                .filter((r) => r.currency === investment.currency)
+                .reduce((sum, r) => sum + r.amount, 0);
+              const invested = investment.amount + toppedUp;
+              const net = returned - invested;
+
+              return (
+                <div key={investment.id} className="card py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium text-foreground">
+                        {investment.name}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {formatShortDate(investment.date)}
+                        {investment.account && ` · ${investment.account.name}`}
+                        {investment.kind && ` · ${investment.kind}`}
+                      </span>
+                    </div>
+                    <StatusChip status={investment.status} />
+                  </div>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <span className="block text-[11px] text-muted-foreground">Invested</span>
+                      <span className="tnum text-sm text-foreground">
+                        <Private chars={5}>
+                          {formatCurrency(invested, investment.currency)}
+                        </Private>
+                      </span>
+                      {toppedUp > 0 && (
+                        <span className="block text-[10px] text-faint-foreground">
+                          incl. {formatCurrency(toppedUp, investment.currency)} in top-ups
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-muted-foreground">Returned</span>
+                      <span className="tnum text-sm text-foreground">
+                        <Private chars={5}>
+                          {formatCurrency(returned, investment.currency)}
+                        </Private>
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-muted-foreground">Net</span>
+                      <span
+                        className={`tnum text-sm font-medium ${
+                          net >= 0 ? "text-success" : "text-danger"
+                        }`}
+                      >
+                        <Private chars={5}>{formatCurrency(net, investment.currency)}</Private>
+                      </span>
+                    </div>
+                  </div>
+
+                  {investment.notes && (
+                    <p className="mt-2 text-xs text-muted-foreground">{investment.notes}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="mt-6">
         <h2 className="section-title">Add or update a holding</h2>
@@ -797,6 +1013,70 @@ async function LoansTab() {
             </button>
           </div>
         </form>
+      </section>
+    </>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+
+async function TransfersTab() {
+  const transfers = await getTransfers(50);
+
+  return (
+    <>
+      <p className="page-subtitle mt-6">
+        Money moved between your own accounts. Never counted as income or expense — a transfer
+        would otherwise inflate both sides.
+      </p>
+
+      <section className="mt-4 flex flex-col gap-2">
+        {transfers.length === 0 && <EmptyState message="No transfers recorded." />}
+
+        {transfers.map((transfer) => {
+          // A cross-currency transfer carries its own implied rate. Showing it
+          // beats making the reader divide two numbers in their head.
+          const crossCurrency = transfer.fromCurrency !== transfer.toCurrency;
+          const impliedRate =
+            crossCurrency && transfer.fromAmount !== 0
+              ? transfer.toAmount / transfer.fromAmount
+              : null;
+
+          return (
+            <div key={transfer.id} className="card py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-foreground/90">{transfer.fromAccount.name}</span>
+                  <span className="text-faint-foreground">to</span>
+                  <span className="text-foreground/90">{transfer.toAccount.name}</span>
+                </span>
+                <span className="text-xs text-faint-foreground">
+                  {formatShortDate(transfer.date)}
+                </span>
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-baseline gap-2 text-sm">
+                <span className="tnum text-danger">
+                  −<Private chars={5}>{formatCurrency(transfer.fromAmount, transfer.fromCurrency)}</Private>
+                </span>
+                <span className="text-faint-foreground">→</span>
+                <span className="tnum text-success">
+                  +<Private chars={5}>{formatCurrency(transfer.toAmount, transfer.toCurrency)}</Private>
+                </span>
+                {impliedRate !== null && (
+                  <span className="text-[11px] text-muted-foreground">
+                    @ {impliedRate.toFixed(4)} {transfer.toCurrency}/{transfer.fromCurrency}
+                  </span>
+                )}
+              </div>
+
+              {transfer.note && (
+                <p className="mt-1 text-xs text-muted-foreground">{transfer.note}</p>
+              )}
+            </div>
+          );
+        })}
       </section>
     </>
   );
