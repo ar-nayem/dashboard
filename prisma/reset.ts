@@ -35,6 +35,7 @@ async function main() {
   await prisma.investmentTopUp.deleteMany();
   await prisma.investment.deleteMany();
   await prisma.transfer.deleteMany();
+  await prisma.exchangeRate.deleteMany();
   await prisma.account.deleteMany();
   await prisma.loan.deleteMany();
   await prisma.projectMetric.deleteMany();
@@ -65,8 +66,19 @@ async function main() {
   // than one that fails, because the leftovers surface later as phantom data.
   // Model names come from the schema file rather than Prisma.dmmf, which the
   // generated client in Prisma 7 does not expose.
+  //
+  // AppSetting is deliberately exempt: it holds the in-app password override
+  // (see src/lib/password.ts), which is auth configuration, not personal
+  // data — wiping it on every reset would silently revert the password to
+  // whatever is in .env, an unpleasant surprise to discover by being locked
+  // out. It is excluded from both the deleteMany() calls above and this
+  // check, on purpose.
+  const PRESERVED_MODELS = new Set(["AppSetting"]);
+
   const schema = readFileSync(new URL("schema.prisma", import.meta.url), "utf8");
-  const modelNames = [...schema.matchAll(/^model\s+(\w+)/gm)].map((match) => match[1]);
+  const modelNames = [...schema.matchAll(/^model\s+(\w+)/gm)]
+    .map((match) => match[1])
+    .filter((name) => !PRESERVED_MODELS.has(name));
 
   const leftovers: string[] = [];
   for (const name of modelNames) {

@@ -6,17 +6,17 @@ A single-user personal dashboard. Next.js 16, Prisma 7, SQLite, no chart library
 
 ```bash
 npm install
-cp .env.example .env      # then fill in SESSION_SECRET and APP_PASSWORD_HASH
+cp .env.example .env      # then fill in SESSION_SECRET
 npx prisma db push
 npm run db:reset          # empty database, ready for your data
+npm run set:password      # sets APP_PASSWORD_HASH — prompts, doesn't echo
 npm run dev
 ```
 
-Generate the two required secrets:
+Generate `SESSION_SECRET`:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-npx tsx -e "import('./src/lib/password.ts').then(m => console.log(m.hashPassword('your-password')))"
 ```
 
 ### Database commands
@@ -168,9 +168,34 @@ Contents of URL**.
 Valid `type` values: `weight`, `resting_hr`, `hrv`, `vo2max`, `steps`,
 `active_energy`, `sleep`. Then add a daily trigger under the Automation tab.
 
+## Changing the password
+
+Day to day, do it from inside the app: **Settings → Security**. It asks for
+the current password, takes effect immediately for future logins, and needs
+neither SSH nor a restart — a running server can't rewrite its own `.env`,
+so this writes to a small `AppSetting` database row instead, which
+`getStoredPasswordHash()` (`src/lib/password.ts`) checks before falling back
+to `APP_PASSWORD_HASH`. That row always wins once it exists.
+
+Locked out and can't get to Settings? That's what the SSH path is for:
+
+```bash
+npm run set:password
+```
+
+This is the **only** thing that can reset a forgotten password, since the
+in-app form requires knowing the current one. It rewrites `.env` and — this
+part matters — also deletes the `AppSetting` row, so `.env` actually takes
+back over. Skipping that second step would make the reset silently do
+nothing, since the in-app row would keep outranking it.
+
+`npm run db:reset` never touches either of these: `AppSetting` is excluded
+on purpose (it's auth configuration, not personal data) so wiping your
+records can never revert your password out from under you as a side effect.
+
 ## Security notes
 
-- One shared password, no user table. Rotating `APP_PASSWORD_HASH` does **not**
+- One shared password, no user table. Rotating the password does **not**
   invalidate existing sessions — rotate `SESSION_SECRET` to force everyone out.
 - `/api/cron` and `/api/health-webhook` authenticate with constant-time secret
   comparison and refuse all requests when their secret is unset.

@@ -15,6 +15,28 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+// A tiny key-value override store. Its only current use is "password_hash":
+// the app boots with its password hash in APP_PASSWORD_HASH (.env), but once
+// someone changes it from Settings the new hash is written HERE instead —
+// changing a running process's own environment doesn't work, and this avoids
+// needing a restart for a password change to take effect.
+//
+// getStoredPasswordHash() (src/lib/password.ts) checks this table first and
+// falls back to the .env value when no row exists, so a fresh deploy that has
+// never had its password changed in-app keeps working unmodified.
+//
+// The row deliberately outranks .env once it exists — see scripts/set-password.mjs
+// for why the SSH recovery path must delete it rather than just rewriting .env.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
 // Cross-cutting
 // ---------------------------------------------------------------------------
 

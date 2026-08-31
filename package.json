@@ -12,7 +12,7 @@
     "db:reset": "tsx prisma/reset.ts",
     "db:seed:demo": "tsx prisma/demo-seed.ts",
     "db:studio": "prisma studio",
-    "set:password": "node scripts/set-password.mjs",
+    "set:password": "tsx scripts/set-password.ts",
     "seed:workouts": "tsx prisma/seed-workouts.ts"
   },
   "dependencies": {

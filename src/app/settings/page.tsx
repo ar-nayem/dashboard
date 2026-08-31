@@ -2,6 +2,7 @@ import Link from "next/link";
 import { verifySession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { EmptyState } from "@/components/empty-state";
+import { ChangePasswordForm } from "@/components/change-password-form";
 import { DOCUMENT_KINDS, EQUIPMENT } from "@/lib/enums";
 import { formatDate, daysUntil } from "@/lib/format";
 import {
@@ -28,6 +29,7 @@ const TABS = [
   { key: "people", label: "Birthdays" },
   { key: "exercises", label: "Exercises" },
   { key: "shipped", label: "Shipped" },
+  { key: "security", label: "Security" },
 ];
 
 /** Small delete button used by every list below. */
@@ -89,7 +91,29 @@ export default async function SettingsPage({
       {tab === "people" && <BirthdaysSection />}
       {tab === "exercises" && <ExercisesSection />}
       {tab === "shipped" && <ShippedSection />}
+      {tab === "security" && <SecuritySection />}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function SecuritySection() {
+  return (
+    <section className="mt-6">
+      <h2 className="section-title">Change password</h2>
+      <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+        Takes effect immediately for future logins — no restart needed. Sessions already signed in
+        on other devices stay signed in until they expire.
+      </p>
+      <ChangePasswordForm />
+
+      <p className="mt-4 max-w-sm text-xs text-faint-foreground">
+        Forgot your password? There is no recovery flow inside the app by design — this is a
+        single-password app with no email on file. Reset it over SSH instead:{" "}
+        <code className="rounded bg-background px-1 py-0.5">npm run set:password</code>
+      </p>
+    </section>
   );
 }
 

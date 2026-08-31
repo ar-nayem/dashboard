@@ -4,11 +4,65 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { verifySession } from "@/lib/session";
 import { DOCUMENT_KINDS, parseEnum } from "@/lib/enums";
+import { getStoredPasswordHash, hashPassword, setStoredPasswordHash, verifyPassword } from "@/lib/password";
 
 // Reference data touches nearly every page, so mutations here revalidate the
 // whole layout rather than one route.
 function revalidateAll() {
   revalidatePath("/", "layout");
+}
+
+// --- Password ----------------------------------------------------------
+
+export type ChangePasswordState = { error?: string; success?: string } | undefined;
+
+const MIN_PASSWORD_LENGTH = 12;
+
+/**
+ * Self-serve password change. Requires the current password even though the
+ * caller is already an authenticated session — this app has exactly one
+ * account and no email/2FA recovery, so re-proving the password here is the
+ * only thing standing between an unlocked browser tab and a full takeover.
+ *
+ * Writes to AppSetting rather than .env: a running process cannot rewrite its
+ * own environment, so this is what makes the change take effect immediately,
+ * with no restart and no SSH. See getStoredPasswordHash() in lib/password.ts.
+ */
+export async function changePassword(
+  _prevState: ChangePasswordState,
+  formData: FormData,
+): Promise<ChangePasswordState> {
+  await verifySession();
+
+  const currentPassword = String(formData.get("currentPassword") ?? "");
+  const newPassword = String(formData.get("newPassword") ?? "");
+  const confirmPassword = String(formData.get("confirmPassword") ?? "");
+
+  const storedHash = await getStoredPasswordHash();
+  if (!storedHash || !verifyPassword(currentPassword, storedHash)) {
+    return { error: "Current password is incorrect." };
+  }
+
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    return {
+      error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters — this app is reachable from the public internet.`,
+    };
+  }
+
+  if (newPassword !== confirmPassword) {
+    return { error: "New password and confirmation don't match." };
+  }
+
+  if (verifyPassword(newPassword, storedHash)) {
+    return { error: "New password must be different from the current one." };
+  }
+
+  await setStoredPasswordHash(hashPassword(newPassword));
+
+  return {
+    success:
+      "Password changed. It takes effect immediately — your other devices stay signed in until their session expires.",
+  };
 }
 
 // --- Areas -----------------------------------------------------------------
