@@ -883,3 +883,23 @@ model SyncRun {
 
   @@index([integrationId, startedAt])
 }
+
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+
+// Pictures (and other media) the user uploads here, served out publicly at
+// GET /api/media for the portfolio site's gallery to pull from. `url` is
+// server-relative (e.g. "/uploads/media/<file>"), stored without BASE_PATH —
+// callers prepend it, same convention as everywhere else in this app.
+model MediaItem {
+  id        String   @id @default(cuid())
+  url       String
+  title     String?
+  link      String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+}

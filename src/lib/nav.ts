@@ -16,6 +16,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/finance", label: "Finance", icon: "M3 17.5 9.5 11l4 4L21 7.5M21 7.5h-4.5M21 7.5V12" },
   { href: "/projects", label: "Projects", icon: "M3 7.5h7l1.75 2.5H21v9.5H3zM3 7.5V5h5.5l1.5 2.5" },
   { href: "/video", label: "Video", icon: "M3 6.5h12v11H3zM15 10.5l6-3.5v10l-6-3.5z" },
+  { href: "/media", label: "Media", icon: "M4 5.5h16v13H4zM4 15l4.5-4.5 3 3L16 9l4 4M9 9.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" },
   { href: "/written", label: "Written", icon: "M6 3.5h8.5L19 8v12.5H6zM14 3.5V8h5M9 12.5h7M9 16h7" },
   { href: "/itinerary", label: "Itinerary", icon: "M12 21.5s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" },
   { href: "/goals", label: "Goals", icon: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z M12 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" },
