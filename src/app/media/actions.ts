@@ -7,7 +7,9 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { verifySession } from "@/lib/session";
 
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads", "media");
+// Outside public/ on purpose — see the route handler at
+// src/app/api/media/file/[filename]/route.ts for why.
+const UPLOAD_DIR = path.join(process.cwd(), "uploads", "media");
 const MAX_BYTES = 20 * 1024 * 1024;
 const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -36,7 +38,7 @@ export async function createMediaItem(formData: FormData) {
 
   await prisma.mediaItem.create({
     data: {
-      url: `/uploads/media/${filename}`,
+      url: `/api/media/file/${filename}`,
       title: String(formData.get("title") ?? "").trim() || null,
       link: String(formData.get("link") ?? "").trim() || null,
       sortOrder: (last?.sortOrder ?? -1) + 1,
@@ -69,7 +71,8 @@ export async function deleteMediaItem(formData: FormData) {
   if (!item) return;
 
   // best-effort: an orphaned file on disk is harmless, a crashed delete isn't
-  await unlink(path.join(process.cwd(), "public", item.url)).catch(() => {});
+  const filename = item.url.split("/").pop();
+  if (filename) await unlink(path.join(UPLOAD_DIR, filename)).catch(() => {});
 
   revalidatePath("/media");
 }
