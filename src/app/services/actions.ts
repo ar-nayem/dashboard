@@ -3,65 +3,69 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { verifySession } from "@/lib/session";
-import { saveUploadedImage, deleteUploadedImage } from "@/lib/upload";
+import { SERVICE_ICONS, isServiceIcon } from "@/lib/service-icons";
 
-export async function createMediaItem(formData: FormData) {
+export async function createService(formData: FormData) {
   await verifySession();
 
-  const url = await saveUploadedImage(formData.get("file"));
-  if (!url) return;
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) return;
 
-  const last = await prisma.mediaItem.findFirst({
+  const rawIcon = String(formData.get("icon") ?? "");
+  const icon = isServiceIcon(rawIcon) ? rawIcon : SERVICE_ICONS[0];
+
+  const last = await prisma.service.findFirst({
     orderBy: { sortOrder: "desc" },
     select: { sortOrder: true },
   });
 
-  await prisma.mediaItem.create({
+  await prisma.service.create({
     data: {
-      url,
-      title: String(formData.get("title") ?? "").trim() || null,
-      link: String(formData.get("link") ?? "").trim() || null,
+      icon,
+      title,
+      description: String(formData.get("description") ?? "").trim(),
       sortOrder: (last?.sortOrder ?? -1) + 1,
     },
   });
 
-  revalidatePath("/media");
+  revalidatePath("/services");
 }
 
-export async function updateMediaItem(formData: FormData) {
+export async function updateService(formData: FormData) {
   await verifySession();
   const id = String(formData.get("id") ?? "");
   if (!id) return;
-  await prisma.mediaItem.update({
+
+  const rawIcon = String(formData.get("icon") ?? "");
+  const icon = isServiceIcon(rawIcon) ? rawIcon : SERVICE_ICONS[0];
+
+  await prisma.service.update({
     where: { id },
     data: {
-      title: String(formData.get("title") ?? "").trim() || null,
-      link: String(formData.get("link") ?? "").trim() || null,
+      icon,
+      title: String(formData.get("title") ?? "").trim(),
+      description: String(formData.get("description") ?? "").trim(),
     },
   });
-  revalidatePath("/media");
+  revalidatePath("/services");
 }
 
-export async function deleteMediaItem(formData: FormData) {
+export async function deleteService(formData: FormData) {
   await verifySession();
   const id = String(formData.get("id") ?? "");
   if (!id) return;
-
-  const item = await prisma.mediaItem.delete({ where: { id } }).catch(() => null);
-  if (!item) return;
-
-  await deleteUploadedImage(item.url);
-  revalidatePath("/media");
+  await prisma.service.delete({ where: { id } }).catch(() => null);
+  revalidatePath("/services");
 }
 
-export async function reorderMediaItem(formData: FormData) {
+export async function reorderService(formData: FormData) {
   await verifySession();
 
   const id = String(formData.get("id") ?? "");
   const direction = String(formData.get("direction") ?? "");
   if (!id || (direction !== "up" && direction !== "down")) return;
 
-  const items = await prisma.mediaItem.findMany({
+  const items = await prisma.service.findMany({
     orderBy: { sortOrder: "asc" },
     select: { id: true, sortOrder: true },
   });
@@ -71,15 +75,15 @@ export async function reorderMediaItem(formData: FormData) {
   if (index === -1 || swapWith < 0 || swapWith >= items.length) return;
 
   await prisma.$transaction([
-    prisma.mediaItem.update({
+    prisma.service.update({
       where: { id: items[index].id },
       data: { sortOrder: items[swapWith].sortOrder },
     }),
-    prisma.mediaItem.update({
+    prisma.service.update({
       where: { id: items[swapWith].id },
       data: { sortOrder: items[index].sortOrder },
     }),
   ]);
 
-  revalidatePath("/media");
+  revalidatePath("/services");
 }

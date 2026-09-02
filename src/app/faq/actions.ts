@@ -3,65 +3,59 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { verifySession } from "@/lib/session";
-import { saveUploadedImage, deleteUploadedImage } from "@/lib/upload";
 
-export async function createMediaItem(formData: FormData) {
+export async function createFaq(formData: FormData) {
   await verifySession();
 
-  const url = await saveUploadedImage(formData.get("file"));
-  if (!url) return;
+  const question = String(formData.get("question") ?? "").trim();
+  if (!question) return;
 
-  const last = await prisma.mediaItem.findFirst({
+  const last = await prisma.faq.findFirst({
     orderBy: { sortOrder: "desc" },
     select: { sortOrder: true },
   });
 
-  await prisma.mediaItem.create({
+  await prisma.faq.create({
     data: {
-      url,
-      title: String(formData.get("title") ?? "").trim() || null,
-      link: String(formData.get("link") ?? "").trim() || null,
+      question,
+      answer: String(formData.get("answer") ?? "").trim(),
       sortOrder: (last?.sortOrder ?? -1) + 1,
     },
   });
 
-  revalidatePath("/media");
+  revalidatePath("/faq");
 }
 
-export async function updateMediaItem(formData: FormData) {
+export async function updateFaq(formData: FormData) {
   await verifySession();
   const id = String(formData.get("id") ?? "");
   if (!id) return;
-  await prisma.mediaItem.update({
+  await prisma.faq.update({
     where: { id },
     data: {
-      title: String(formData.get("title") ?? "").trim() || null,
-      link: String(formData.get("link") ?? "").trim() || null,
+      question: String(formData.get("question") ?? "").trim(),
+      answer: String(formData.get("answer") ?? "").trim(),
     },
   });
-  revalidatePath("/media");
+  revalidatePath("/faq");
 }
 
-export async function deleteMediaItem(formData: FormData) {
+export async function deleteFaq(formData: FormData) {
   await verifySession();
   const id = String(formData.get("id") ?? "");
   if (!id) return;
-
-  const item = await prisma.mediaItem.delete({ where: { id } }).catch(() => null);
-  if (!item) return;
-
-  await deleteUploadedImage(item.url);
-  revalidatePath("/media");
+  await prisma.faq.delete({ where: { id } }).catch(() => null);
+  revalidatePath("/faq");
 }
 
-export async function reorderMediaItem(formData: FormData) {
+export async function reorderFaq(formData: FormData) {
   await verifySession();
 
   const id = String(formData.get("id") ?? "");
   const direction = String(formData.get("direction") ?? "");
   if (!id || (direction !== "up" && direction !== "down")) return;
 
-  const items = await prisma.mediaItem.findMany({
+  const items = await prisma.faq.findMany({
     orderBy: { sortOrder: "asc" },
     select: { id: true, sortOrder: true },
   });
@@ -71,15 +65,15 @@ export async function reorderMediaItem(formData: FormData) {
   if (index === -1 || swapWith < 0 || swapWith >= items.length) return;
 
   await prisma.$transaction([
-    prisma.mediaItem.update({
+    prisma.faq.update({
       where: { id: items[index].id },
       data: { sortOrder: items[swapWith].sortOrder },
     }),
-    prisma.mediaItem.update({
+    prisma.faq.update({
       where: { id: items[swapWith].id },
       data: { sortOrder: items[index].sortOrder },
     }),
   ]);
 
-  revalidatePath("/media");
+  revalidatePath("/faq");
 }

@@ -903,3 +903,68 @@ model MediaItem {
 
   @@index([sortOrder])
 }
+
+// Portfolio "work" items (the site's project case studies). Named WorkItem,
+// not Project, because Project already exists above for the unrelated
+// business-project tracker — same domain word, two different features.
+model WorkItem {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  role        String
+  description String
+  // Comma-separated, via parseList/serializeList in src/lib/enums.ts.
+  tech        String   @default("")
+  image       String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// Portfolio blog posts. Body is author-authored Markdown, rendered on the
+// portfolio side — there is no untrusted-input path into this model (only
+// the owner, via the authenticated /blog admin page, ever writes one).
+model BlogPost {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  excerpt     String?
+  body        String
+  coverImage  String?
+  published   Boolean  @default(true)
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([publishedAt])
+}
+
+// Portfolio "Services" tiles. `icon` is a key into a fixed allow-list kept
+// in sync between src/app/services/page.tsx (the <select>) and the
+// portfolio's own icon-key -> phosphor-icon map — not a free-text field,
+// since an unknown key can't render anything on the portfolio side.
+model Service {
+  id          String   @id @default(cuid())
+  icon        String
+  title       String
+  description String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// Portfolio FAQ entries.
+model Faq {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+}
