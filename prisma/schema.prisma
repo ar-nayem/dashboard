@@ -968,3 +968,66 @@ model Faq {
 
   @@index([sortOrder])
 }
+
+// ---------------------------------------------------------------------------
+// Repos (GitHub portfolio)
+// ---------------------------------------------------------------------------
+
+// Every shipped codebase on GitHub — the source of truth for both the
+// private infra tracker (repo list, deploy status, pm2/disk health, read
+// live off the VPS this app itself runs on — see src/lib/vps-health.ts) and
+// the public "Projects" page on arnayem.top (rows with `public: true`, via
+// src/app/api/repos). Distinct from Project above, which tracks revenue/
+// installs/traffic for standalone products — same "what am I building"
+// domain, different concern, same reason WorkItem stays separate from
+// Project too.
+// status:   "live" | "building" | "archived" | "superseded"
+// category: "marketplace" | "saas" | "personal" | "education" | "infra" | "site"
+model Repo {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String
+  category    String
+  // Comma-separated, via parseList/serializeList in src/lib/enums.ts.
+  tech        String   @default("")
+  githubUrl   String
+  liveUrl     String?
+  status      String   @default("live")
+  // pm2 process name on the VPS — set to enable the live health check for
+  // this repo; left null for repos not deployed there.
+  pm2Name     String?
+  // Shown on arnayem.top/projects when true. Stays false for anything not
+  // ready to show publicly, without needing a separate draft table.
+  public      Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder])
+  @@index([public])
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn
+// ---------------------------------------------------------------------------
+
+// Weekly-drafted LinkedIn posts about real shipped work. A scheduled job
+// creates drafts from recent commits/deploys; posting itself always happens
+// interactively with explicit approval (src/app/linkedin) — never
+// unattended, since publishing under a real name/account is a one-way door.
+// status: "draft" | "approved" | "posted" | "skipped"
+model LinkedInPost {
+  id         String    @id @default(cuid())
+  body       String
+  // Free-text label for what this post is about (e.g. a repo slug or short
+  // theme) — not a foreign key, since a post can span more than one repo.
+  sourceRepo String?
+  status     String    @default("draft")
+  postedAt   DateTime?
+  postUrl    String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}

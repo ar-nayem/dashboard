@@ -59,10 +59,15 @@ const STATUS_DOT: Record<string, string> = {
   building: "bg-info",
   parked: "bg-faint-foreground",
   archived: "bg-faint-foreground",
+  superseded: "bg-faint-foreground",
   ok: "bg-success",
   stale: "bg-warning",
   error: "bg-danger",
   never: "bg-faint-foreground",
+  draft: "bg-faint-foreground",
+  approved: "bg-info",
+  posted: "bg-success",
+  skipped: "bg-faint-foreground",
 };
 
 export function StatusChip({ status }: { status: string }) {

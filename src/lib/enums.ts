@@ -136,6 +136,31 @@ export type IntegrationStatus = (typeof INTEGRATION_STATUSES)[number];
 export const PROPOSAL_STATUSES = ["pending", "accepted", "dismissed"] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+export const REPO_STATUSES = ["live", "building", "archived", "superseded"] as const;
+export type RepoStatus = (typeof REPO_STATUSES)[number];
+
+export const REPO_CATEGORIES = [
+  "marketplace",
+  "saas",
+  "personal",
+  "education",
+  "infra",
+  "site",
+] as const;
+export type RepoCategory = (typeof REPO_CATEGORIES)[number];
+
+export const REPO_CATEGORY_LABELS: Record<RepoCategory, string> = {
+  marketplace: "Marketplace",
+  saas: "SaaS",
+  personal: "Personal tool",
+  education: "Education",
+  infra: "Infrastructure",
+  site: "Site",
+};
+
+export const LINKEDIN_POST_STATUSES = ["draft", "approved", "posted", "skipped"] as const;
+export type LinkedInPostStatus = (typeof LINKEDIN_POST_STATUSES)[number];
+
 // Narrowing helper for values read back out of SQLite. Falls back to the
 // first allowed value rather than throwing, so one bad row can never take
 // down a whole page render.
